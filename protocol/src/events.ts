@@ -30,6 +30,8 @@ export interface Question {
 export interface QuestionOption {
   label: string
   description: string
+  /** Mockup, snippet or comparison to show while this option is focused. */
+  preview?: string
 }
 
 /**
@@ -50,11 +52,16 @@ export interface PermissionRequest {
  *
  * `deny` carries a message Claude Code reads and may act on, so an empty
  * message is a worse answer than a reason.
+ *
+ * `answers` is keyed by the full question text, not by its header. A
+ * multi-select answer lists the chosen labels separated by a comma, and free
+ * text the developer typed instead of choosing arrives as the value. This is
+ * the shape the agent expects; anything else is read as no answer at all.
  */
 export type PermissionDecision =
   | { decision: 'allow' }
   | { decision: 'deny'; message: string }
-  | { decision: 'answers'; answers: Record<string, string[]> }
+  | { decision: 'answers'; answers: Record<string, string> }
 
 /**
  * An event that is part of the session's record.

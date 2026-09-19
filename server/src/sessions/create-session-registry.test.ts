@@ -315,7 +315,17 @@ describe('session registry', () => {
     agent.emit(initMessage)
     const session = await attaching
 
-    const questions = [{ question: 'Which?', header: 'Pick', multiSelect: false, options: [] }]
+    const questions = [
+      {
+        question: 'Which library?',
+        header: 'Library',
+        multiSelect: false,
+        options: [
+          { label: 'A', description: 'the first' },
+          { label: 'B', description: 'the second' },
+        ],
+      },
+    ]
     const asking = agent.options()?.canUseTool?.('AskUserQuestion', { questions }, {
       signal: new AbortController().signal,
     } as never)
@@ -324,12 +334,12 @@ describe('session registry', () => {
     expect(request.questions).toEqual(questions)
     await registry.answerPermission('4', request.requestId, {
       decision: 'answers',
-      answers: { Which: ['A'] },
+      answers: { 'Which library?': 'A' },
     })
 
     await expect(asking).resolves.toEqual({
       behavior: 'allow',
-      updatedInput: { questions, answers: { Which: ['A'] } },
+      updatedInput: { questions, answers: { 'Which library?': 'A' } },
     })
   })
 

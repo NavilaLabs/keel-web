@@ -74,12 +74,25 @@ describe('permission gate', () => {
       requestId: 'r3',
       toolName: 'AskUserQuestion',
       input: {},
-      questions: [{ question: 'Which?', header: 'Pick', multiSelect: false, options: [] }],
+      questions: [
+        {
+          question: 'Which library?',
+          header: 'Library',
+          multiSelect: false,
+          options: [
+            { label: 'A', description: 'the first' },
+            { label: 'B', description: 'the second' },
+          ],
+        },
+      ],
     }
     const held = gate.hold(ask, new AbortController().signal)
 
-    gate.answer('r3', { decision: 'answers', answers: { Which: ['A'] } })
+    gate.answer('r3', { decision: 'answers', answers: { 'Which library?': 'A' } })
 
-    await expect(held).resolves.toEqual({ decision: 'answers', answers: { Which: ['A'] } })
+    await expect(held).resolves.toEqual({
+      decision: 'answers',
+      answers: { 'Which library?': 'A' },
+    })
   })
 })
