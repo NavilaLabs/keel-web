@@ -1,0 +1,21 @@
+{
+  "name": "keel-web",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+  },
+  "remoteUser": "node",
+  "mounts": [
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=${localEnv:KEEL_TICKET_REPO},target=/home/node/projects/keel-web-tickets,type=bind"
+  ],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude"
+  },
+  "postCreateCommand": "sudo chown node:node /home/node/.claude && npm install",
+  "forwardPorts": [
+    5173,
+    3000
+  ],
+  "initializeCommand": "test -d \"$KEEL_TICKET_REPO\" || { echo \"Set KEEL_TICKET_REPO to the path of the keel-web-tickets clone on the host.\" >&2; exit 1; }"
+}
