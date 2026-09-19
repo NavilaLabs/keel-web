@@ -3,24 +3,37 @@ interface ToolInputProperties {
   input: Record<string, unknown>
 }
 
+const repositoryRoot = '/workspaces/keel-web'
+
 function asText(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function Block({ children }: { children: string }) {
+function Code({ children, tone }: { children: string; tone?: 'added' | 'removed' }) {
+  const colour =
+    tone === 'added'
+      ? 'text-keel'
+      : tone === 'removed'
+        ? 'text-muted-foreground line-through decoration-1'
+        : 'text-foreground'
   return (
-    <pre className="overflow-x-auto whitespace-pre-wrap break-words bg-code p-2 font-mono text-xs text-foreground">
+    <pre
+      className={`overflow-x-auto rounded-sm bg-code p-2.5 font-mono text-[13px] leading-relaxed break-words whitespace-pre-wrap ${colour}`}
+    >
       {children}
     </pre>
   )
 }
 
 function Path({ value }: { value: string }) {
-  const outside = !value.startsWith('/workspaces/keel-web') && value.startsWith('/')
+  const outside = value.startsWith('/') && !value.startsWith(repositoryRoot)
+  const shown = value.startsWith(`${repositoryRoot}/`)
+    ? value.slice(repositoryRoot.length + 1)
+    : value
   return (
-    <p className="font-mono text-xs">
-      <span className={outside ? 'text-destructive' : 'text-muted-foreground'}>{value}</span>
-      {outside && <span className="ml-2 text-destructive">outside the repository</span>}
+    <p className="font-mono text-[13px]">
+      <span className={outside ? 'text-destructive' : 'text-foreground'}>{shown}</span>
+      {outside && <span className="ml-2 font-sans text-destructive">outside the repository</span>}
     </p>
   )
 }
@@ -37,38 +50,35 @@ export function ToolInput({ name, input }: ToolInputProperties) {
   const filePath = asText(input.file_path)
 
   if (name === 'Bash' && command !== undefined) {
+    const description = asText(input.description)
     return (
-      <div className="flex flex-col gap-1">
-        <Block>{command}</Block>
-        {asText(input.description) !== undefined && (
-          <p className="text-xs text-muted-foreground">{asText(input.description)}</p>
+      <div className="flex flex-col gap-1.5">
+        <Code>{command}</Code>
+        {description !== undefined && (
+          <p className="text-[13px] text-muted-foreground">{description}</p>
         )}
       </div>
     )
   }
 
   if (filePath !== undefined) {
-    const oldText = asText(input.old_string)
-    const newText = asText(input.new_string)
+    const removed = asText(input.old_string)
+    const added = asText(input.new_string)
     const content = asText(input.content)
     return (
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1.5">
         <Path value={filePath} />
-        {oldText !== undefined && newText !== undefined && (
-          <>
-            <Block>{`- ${oldText}`}</Block>
-            <Block>{`+ ${newText}`}</Block>
-          </>
-        )}
+        {removed !== undefined && <Code tone="removed">{removed}</Code>}
+        {added !== undefined && <Code tone="added">{added}</Code>}
         {content !== undefined && (
           <>
-            <p className="text-xs text-muted-foreground">{content.split('\n').length} lines</p>
-            <Block>{content}</Block>
+            <p className="text-[13px] text-muted-foreground">{content.split('\n').length} lines</p>
+            <Code>{content}</Code>
           </>
         )}
       </div>
     )
   }
 
-  return <Block>{JSON.stringify(input, null, 2)}</Block>
+  return <Code>{JSON.stringify(input, null, 2)}</Code>
 }

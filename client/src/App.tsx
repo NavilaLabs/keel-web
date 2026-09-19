@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button } from '@/components/ui/button.tsx'
 import { ChatColumn } from './chat/chat-column.tsx'
 import { createConnection } from './connection/create-connection.ts'
 import { useRoute } from './routing/use-route.ts'
@@ -26,11 +25,11 @@ export default function App() {
 
   return (
     <div className="flex h-full">
-      <nav className="flex w-56 shrink-0 flex-col gap-1 border-r border-border p-3">
-        <h1 className="mb-2 text-sm text-foreground">keel</h1>
+      <nav className="flex w-60 shrink-0 flex-col border-r border-border px-3 py-4">
+        <span className="px-2 pb-5 font-mono text-[13px] tracking-tight text-keel">keel</span>
 
         <form
-          className="mb-2 flex gap-1"
+          className="pb-4"
           onSubmit={(submitted) => {
             submitted.preventDefault()
             const ticketId = entry.trim()
@@ -41,35 +40,42 @@ export default function App() {
         >
           <input
             value={entry}
-            placeholder="Ticket"
+            placeholder="Ticket number"
             onChange={(changed) => setEntry(changed.target.value)}
-            className="w-full min-w-0 border border-input bg-background px-2 py-1 text-sm"
+            className="w-full rounded-sm border border-input bg-background px-2 py-1.5 font-mono text-[13px] placeholder:font-sans placeholder:text-muted-foreground focus-visible:border-keel focus-visible:outline-none"
           />
-          <Button type="submit" size="sm" variant="outline">
-            Open
-          </Button>
         </form>
 
-        {opened.map((ticketId) => (
-          <button
-            key={ticketId}
-            type="button"
-            onClick={() => open(ticketId)}
-            className={`px-2 py-1 text-left text-sm ${
-              ticketId === route.ticketId
-                ? 'border-l-2 border-brand bg-accent text-foreground'
-                : 'text-muted-foreground hover:bg-accent'
-            }`}
-          >
-            Ticket {ticketId}
-          </button>
-        ))}
+        {opened.map((ticketId) => {
+          const active = ticketId === route.ticketId
+          return (
+            <button
+              key={ticketId}
+              type="button"
+              onClick={() => open(ticketId)}
+              className={`-ml-px border-l-2 py-1.5 pl-3 text-left font-mono text-[13px] focus-visible:outline-none ${
+                active
+                  ? 'border-keel text-foreground'
+                  : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
+              }`}
+            >
+              {ticketId}
+            </button>
+          )
+        })}
       </nav>
 
-      <main className="min-w-0 flex-1 p-6">
-        <p className="text-sm text-muted-foreground">
-          Tickets, pull requests and diagrams appear here in a later ticket.
-        </p>
+      <main className="flex min-w-0 flex-1 items-end p-10">
+        {route.ticketId === undefined ? (
+          <p className="max-w-[40ch] text-[15px] leading-relaxed text-muted-foreground">
+            Open a ticket to start a session. Everything the agent does stays visible here, and
+            nothing runs until you allow it.
+          </p>
+        ) : (
+          <p className="max-w-[40ch] text-[13px] text-muted-foreground">
+            The ticket, its pull request and the architecture diagrams land in this space.
+          </p>
+        )}
       </main>
 
       <ChatColumn store={store} ticketId={route.ticketId} />
