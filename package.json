@@ -1,15 +1,25 @@
 {
   "name": "keel-web",
   "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "type": "module",
-  "workspaces": ["client", "server"],
   "scripts": {
     "dev": "npm-run-all --parallel dev:server dev:client",
     "dev:client": "npm run dev --workspace client",
     "dev:server": "npm run dev --workspace server",
-    "build": "npm run build --workspaces"
+    "build": "npm run build --workspaces",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "npm-run-all2": "^8.0.0"
+    "npm-run-all2": "^8.0.0",
+    "oxfmt": "0.68.0",
+    "oxlint": "^1.81.0",
+    "vitest": "^5.0.1"
   }
 }
