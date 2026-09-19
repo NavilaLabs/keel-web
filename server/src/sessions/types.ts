@@ -82,7 +82,11 @@ export interface SessionRegistry {
 }
 
 /** The container has no Claude Code login; `claude` must be run in it once. */
-export declare class AuthRequiredError extends Error {}
+export class AuthRequiredError extends Error {
+  override readonly name = 'AuthRequiredError'
+}
 
 /** The agent subprocess did not become ready. */
-export declare class SessionStartError extends Error {}
+export class SessionStartError extends Error {
+  override readonly name = 'SessionStartError'
+}

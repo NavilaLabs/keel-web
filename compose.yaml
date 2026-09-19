@@ -6,6 +6,8 @@ services:
     working_dir: /workspaces/keel-web
     environment:
       CLAUDE_CONFIG_DIR: /home/node/.claude
+      KEEL_WEB_DATA_DIR: /home/node/.local/share/keel-web
+      KEEL_WEB_WORKING_DIR: /workspaces/keel-web
     ports:
       - '5173:5173'
       - '3000:3000'
@@ -15,6 +17,7 @@ services:
       - client_node_modules:/workspaces/keel-web/client/node_modules
       - server_node_modules:/workspaces/keel-web/server/node_modules
       - claude_config:/home/node/.claude
+      - keel_web_data:/home/node/.local/share/keel-web
       - ${KEEL_TICKET_REPO:?Set KEEL_TICKET_REPO to the path of the keel-web-tickets clone on the host}:/home/node/projects/keel-web-tickets
 
 volumes:
@@ -22,3 +25,4 @@ volumes:
   client_node_modules:
   server_node_modules:
   claude_config:
+  keel_web_data:

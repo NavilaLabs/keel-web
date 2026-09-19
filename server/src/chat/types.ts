@@ -1,5 +1,5 @@
 import type { Hono } from 'hono'
-import type { LoggerVariables } from '../logging/types.ts'
+import type { LoggerVariables } from '../logging/types.js'
 
 /**
  * The browser-facing surface of a session, mounted by the HTTP app.
@@ -27,6 +27,6 @@ export type CreateChatRoutes = (
 ) => Hono<{ Variables: LoggerVariables }>
 
 export interface ChatDependencies {
-  sessions: import('../sessions/types.ts').SessionRegistry
-  transcript: import('../transcript/types.ts').TranscriptLog
+  sessions: import('../sessions/types.js').SessionRegistry
+  transcript: import('../transcript/types.js').TranscriptLog
 }
