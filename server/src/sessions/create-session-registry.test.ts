@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
@@ -107,8 +107,7 @@ describe('session registry', () => {
   let workspaces: WorkspaceRegistry
   let agent: ReturnType<typeof agentStub>
 
-  async function registryWith(loggedIn = true): Promise<SessionRegistry> {
-    if (loggedIn) await writeFile(join(configDirectory, '.credentials.json'), '{}', 'utf8')
+  function registryWith(): SessionRegistry {
     return createSessionRegistry({
       workspaces,
       configDirectory,
@@ -134,15 +133,30 @@ describe('session registry', () => {
     agent = agentStub()
   })
 
-  it('refuses to start when the container has no login', async () => {
-    const registry = await registryWith(false)
+  it('reads an agent that gives up before it is ready as a missing login', async () => {
+    const registry = registryWith()
+    const attaching = registry.attach(four)
+    await vi.waitFor(() => expect(agent.runs()).toBe(1))
+    agent.fail(new Error('Claude Code process exited with code 1'))
 
-    await expect(registry.attach(four)).rejects.toBeInstanceOf(AuthRequiredError)
-    expect(agent.runs()).toBe(0)
+    await expect(attaching).rejects.toBeInstanceOf(AuthRequiredError)
+  })
+
+  it("keeps the agent's own words in that failure", async () => {
+    const registry = registryWith()
+    const attaching = registry.attach(four)
+    await vi.waitFor(() => expect(agent.runs()).toBe(1))
+    agent.fail(new Error('Claude Code process exited with code 1'))
+
+    await expect(attaching).rejects.toThrow(/exited with code 1/)
+    expect((await transcript.since(four, 0))[0]).toMatchObject({
+      type: 'session.failed',
+      code: 'auth_required',
+    })
   })
 
   it('returns the session once the agent reports its id', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
 
     const attaching = registry.attach(four)
     agent.emit(initMessage)
@@ -151,13 +165,13 @@ describe('session registry', () => {
   })
 
   it('gives up when the agent never reports a session', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
 
     await expect(registry.attach(four)).rejects.toBeInstanceOf(SessionStartError)
   })
 
   it('starts one agent for concurrent attaches', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
 
     const both = Promise.all([registry.attach(four), registry.attach(four)])
     agent.emit(initMessage)
@@ -168,7 +182,7 @@ describe('session registry', () => {
   })
 
   it('reuses the running session instead of starting a second one', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -179,7 +193,7 @@ describe('session registry', () => {
   })
 
   it('resumes a ticket from the session id it remembered', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -193,7 +207,7 @@ describe('session registry', () => {
   })
 
   it('runs the agent in the code repository', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -202,7 +216,7 @@ describe('session registry', () => {
   })
 
   it('records assistant output and hands it to a subscriber', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -220,7 +234,7 @@ describe('session registry', () => {
   })
 
   it('streams deltas without recording them', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -238,7 +252,7 @@ describe('session registry', () => {
   })
 
   it('stops delivering after unsubscribing', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -257,7 +271,7 @@ describe('session registry', () => {
   })
 
   it('records a message before it reaches the agent', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -268,13 +282,13 @@ describe('session registry', () => {
   })
 
   it('rejects input for a ticket that has no session', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
 
     await expect(registry.send(four, 'hello')).rejects.toThrow()
   })
 
   it('reports an unknown permission answer as not held', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -285,7 +299,7 @@ describe('session registry', () => {
   })
 
   it('asks the browser before a tool runs, and records both sides', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     const session = await attaching
@@ -310,7 +324,7 @@ describe('session registry', () => {
   })
 
   it('passes a denial and its reason back to the agent', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     const session = await attaching
@@ -326,7 +340,7 @@ describe('session registry', () => {
   })
 
   it('carries structured answers into the tool input', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     const session = await attaching
@@ -360,7 +374,7 @@ describe('session registry', () => {
   })
 
   it('asks for every tool call, whatever the rules say', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -374,7 +388,7 @@ describe('session registry', () => {
   })
 
   it('records a failing agent as an error the UI can show', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -388,8 +402,8 @@ describe('session registry', () => {
     })
   })
 
-  it('recognises a lost login in an agent failure', async () => {
-    const registry = await registryWith()
+  it('reads a failure after readiness as an agent error, whatever it says', async () => {
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     await attaching
@@ -397,11 +411,21 @@ describe('session registry', () => {
     agent.fail(new Error('Invalid API key - Please run /login'))
     await vi.waitFor(async () => expect(await transcript.since(four, 1)).toHaveLength(1))
 
-    expect((await transcript.since(four, 1))[0]).toMatchObject({ code: 'auth_required' })
+    expect((await transcript.since(four, 1))[0]).toMatchObject({ code: 'agent_error' })
+  })
+
+  it('hands the agent the configuration directory it was given', async () => {
+    const registry = registryWith()
+    const attaching = registry.attach(four)
+    agent.emit(initMessage)
+    await attaching
+
+    expect(agent.options()?.env).toMatchObject({ CLAUDE_CONFIG_DIR: configDirectory })
+    expect(agent.options()?.env?.PATH).toBe(process.env.PATH)
   })
 
   it('denies what is still held when the session closes', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const attaching = registry.attach(four)
     agent.emit(initMessage)
     const session = await attaching
@@ -416,7 +440,7 @@ describe('session registry', () => {
   })
 
   it('refuses a workspace that is not registered', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
 
     await expect(registry.attach({ workspaceId: 'gone', ticketId: '4' })).rejects.toBeInstanceOf(
       UnknownWorkspaceError,
@@ -425,7 +449,7 @@ describe('session registry', () => {
   })
 
   it('refuses a workspace that has no keel configuration', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
 
     await expect(registry.attach({ workspaceId: 'bare', ticketId: '4' })).rejects.toBeInstanceOf(
       UnknownWorkspaceError,
@@ -433,7 +457,7 @@ describe('session registry', () => {
   })
 
   it('keeps sessions of the same ticket number in different workspaces apart', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
     const first = registry.attach(four)
     agent.emit(initMessage)
     await first
@@ -445,7 +469,7 @@ describe('session registry', () => {
   })
 
   it('closes an unknown ticket without complaining', async () => {
-    const registry = await registryWith()
+    const registry = registryWith()
 
     await expect(registry.close({ workspaceId: 'w1', ticketId: 'nope' })).resolves.toBeUndefined()
     await expect(

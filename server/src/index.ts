@@ -32,9 +32,15 @@ app.get('/api/workspaces', (c) =>
 app.route('/api', createChatRoutes({ sessions, transcript, workspaces }))
 
 const port = Number(process.env.PORT ?? 3000)
-serve({ fetch: app.fetch, port }, () => {
+
+// The literal address, not 'localhost', so the binding cannot land on ::1
+// alone. Reaching this server means reaching an agent that runs as the
+// developer over their whole filesystem, so it stays on this machine.
+const hostname = '127.0.0.1'
+
+serve({ fetch: app.fetch, port, hostname }, () => {
   logger.info(
     { workspaces: workspaces.list().length },
-    `keel-web server listening on http://localhost:${port}`,
+    `keel-web server listening on http://${hostname}:${port}`,
   )
 })

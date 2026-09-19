@@ -1,8 +1,5 @@
 #!/bin/sh
 
-if ! docker compose exec -T dev true 2>/dev/null; then
-  echo "The dev container is not running. Start it with: docker compose up -d dev" >&2
-  exit 1
-fi
-
-exec docker compose exec -T dev prek run
+# keel-web runs on the host, so the checks do too. They are the same two the
+# CI workflow runs.
+npm run lint && npm run format:check

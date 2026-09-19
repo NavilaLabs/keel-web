@@ -95,11 +95,17 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
         void send(message)
       })
 
-      const abort = () => {
+      // Both paths can fire, and the stream's own abort can arrive after the
+      // finally block has already run. The contract is one detach per viewer,
+      // so the first one wins and the rest are ignored.
+      let detached = false
+      const detach = () => {
+        if (detached) return
+        detached = true
         unsubscribe()
       }
-      context.req.raw.signal.addEventListener('abort', abort, { once: true })
-      stream.onAbort(abort)
+      context.req.raw.signal.addEventListener('abort', detach, { once: true })
+      stream.onAbort(detach)
 
       try {
         for (const event of await transcript.since(key, resumeFrom)) {
@@ -115,7 +121,7 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
           context.req.raw.signal.addEventListener('abort', () => resolve(), { once: true })
         })
       } finally {
-        unsubscribe()
+        detach()
         logger.info(
           {
             ...key,

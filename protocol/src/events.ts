@@ -108,9 +108,12 @@ export type ServerEventBody =
   | { type: 'session.failed'; code: SessionFailureCode; message: string }
 
 /**
- * `auth_required` means the container has no Claude Code login and the
- * developer must run `claude` in it once. It is the only failure the UI can
- * act on by itself.
+ * `auth_required` means the agent gave up before it was ready, which is what
+ * a missing or expired login looks like from here. A login is never probed
+ * for, so an agent that failed to start for an unrelated reason arrives under
+ * the same code, with its own output in `message`. It is the only failure the
+ * UI can act on by itself: run `claude` once as the user that started the
+ * server.
  */
 export type SessionFailureCode = 'auth_required' | 'startup_failed' | 'agent_error'
 
