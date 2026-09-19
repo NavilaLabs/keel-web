@@ -30,6 +30,50 @@ export interface SessionKey {
   ticketId: TicketId
 }
 
+/**
+ * Where a repository's tickets live, as `.claude/keel.json` names it.
+ *
+ * `repository` is the tracker's own identifier, so `owner/name` for GitHub and
+ * a project key for Jira. The token is never on the wire: only the name of the
+ * environment variable holding it is configuration, and that stays on the
+ * server.
+ */
+export interface WorkspaceTracker {
+  source: 'github' | 'jira'
+  repository: string
+}
+
+/**
+ * A repository the developer has added, as the sidebar sees it.
+ *
+ * `state` is the whole story, so the three cases are exhaustive and none of
+ * them overlaps. They are ordered by what can be known: an unreachable path
+ * says nothing about the keel configuration inside it, so `unreachable` wins
+ * over `unconfigured` rather than both being reported.
+ *
+ * Only `ready` carries `ticketRepository`, because that is exactly the
+ * condition under which a session, a transcript and a ticket view are
+ * possible. A workspace in either other state is listed, is selectable, and
+ * explains itself through `reason`, which is one sentence written for the
+ * developer rather than an error code.
+ */
+export type WorkspaceSummary = {
+  id: WorkspaceId
+  /** What the developer calls it, defaulting to the directory name. */
+  name: string
+  /** Absolute path, as it is on the machine keel-web runs on. */
+  path: string
+} & (
+  | {
+      state: 'ready'
+      /** Absolute path of the ticket repository `.claude/keel.json` names. */
+      ticketRepository: string
+      tracker?: WorkspaceTracker
+    }
+  | { state: 'unreachable'; reason: string }
+  | { state: 'unconfigured'; reason: string }
+)
+
 export type RequestId = string
 
 export type ToolUseId = string

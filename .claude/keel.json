@@ -1,0 +1,13 @@
+{
+  "ticket_repo": "~/projects/keel-web-tickets",
+  "tickets": {
+    "source": "github",
+    "repository": "NavilaLabs/keel-web",
+    "token_env": "GITHUB_PERSONAL_ACCESS_TOKEN"
+  },
+  "pull_requests": {
+    "host": "github",
+    "repository": "NavilaLabs/keel-web",
+    "token_env": "GITHUB_PERSONAL_ACCESS_TOKEN"
+  }
+}
