@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import {
+  query,
+  type Options,
+  type SDKMessage,
+  type SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk'
 import type {
   PermissionDecision,
   PermissionRequest,
@@ -22,6 +27,18 @@ import {
   type Unsubscribe,
 } from './types.js'
 
+/**
+ * Starts an agent run.
+ *
+ * Narrower than the SDK's own `query`, which returns a generator with control
+ * methods the registry does not use: it drives the run through its own
+ * `AbortController` instead.
+ */
+export type RunQuery = (parameters: {
+  prompt: AsyncIterable<SDKUserMessage>
+  options: Options
+}) => AsyncIterable<SDKMessage>
+
 export interface SessionRegistryOptions {
   /** Working directory of the agent: the code repository, as in the terminal. */
   workingDirectory: string
@@ -33,6 +50,8 @@ export interface SessionRegistryOptions {
   logger: Logger
   /** Milliseconds to wait for the agent to report its session id. */
   startTimeoutMs?: number
+  /** The agent runner. Injected so the registry can be driven without a real agent. */
+  runQuery?: RunQuery
 }
 
 interface SessionState {
@@ -104,6 +123,7 @@ function looksLikeAuthenticationFailure(text: string): boolean {
 export function createSessionRegistry(options: SessionRegistryOptions): SessionRegistry {
   const { workingDirectory, stateDirectory, configDirectory, transcript, logger } = options
   const startTimeoutMs = options.startTimeoutMs ?? 60_000
+  const runQuery = options.runQuery ?? query
 
   const sessions = new Map<TicketId, SessionState>()
   const starting = new Map<TicketId, Promise<SessionState>>()
@@ -224,7 +244,7 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
 
     const known = await readSessionIds()
     const resume = known[ticketId]
-    const run = query({ prompt: state.input.stream, options: optionsFor(state, resume) })
+    const run = runQuery({ prompt: state.input.stream, options: optionsFor(state, resume) })
 
     let announce: ((sessionId: string) => void) | undefined
     let fail: ((error: Error) => void) | undefined
