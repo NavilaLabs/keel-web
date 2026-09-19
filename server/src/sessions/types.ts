@@ -2,13 +2,13 @@ import type {
   PermissionDecision,
   PermissionRequest,
   RequestId,
+  SessionKey,
   StreamMessage,
-  TicketId,
 } from '@keel-web/protocol'
 
-/** A running Claude Code session. One per ticket, never two. */
+/** A running Claude Code session. One per workspace and ticket, never two. */
 export interface Session {
-  readonly ticketId: TicketId
+  readonly key: SessionKey
 
   /** The Agent SDK session id, used to resume this ticket after a restart. */
   readonly sessionId: string
@@ -29,21 +29,22 @@ export type Unsubscribe = () => void
  */
 export interface SessionRegistry {
   /**
-   * Returns the ticket's session, starting or resuming it if needed.
+   * Returns the session, starting or resuming it if needed.
    *
-   * Idempotent: concurrent calls for one ticket yield the same session and
-   * start only one agent. Rejects with `AuthRequiredError` when the container
-   * has no Claude Code login, and with `SessionStartError` when the agent does
-   * not become ready in time.
+   * The agent runs in the workspace's repository. Idempotent: concurrent calls
+   * for one key yield the same session and start only one agent. Rejects with
+   * `UnknownWorkspaceError` for a workspace that is not registered, with
+   * `AuthRequiredError` when Claude Code has no login, and with
+   * `SessionStartError` when the agent does not become ready in time.
    */
-  attach(ticketId: TicketId): Promise<Session>
+  attach(key: SessionKey): Promise<Session>
 
   /**
    * Queues a message for the session's current or next turn.
    *
-   * Rejects for a ticket that has no session; `attach` first.
+   * Rejects for a key that has no session; `attach` first.
    */
-  send(ticketId: TicketId, text: string): Promise<void>
+  send(key: SessionKey, text: string): Promise<void>
 
   /**
    * Answers a held tool call.
@@ -52,7 +53,7 @@ export interface SessionRegistry {
    * twice is safe.
    */
   answerPermission(
-    ticketId: TicketId,
+    key: SessionKey,
     requestId: RequestId,
     decision: PermissionDecision,
   ): Promise<boolean>
@@ -62,7 +63,7 @@ export interface SessionRegistry {
    *
    * Does nothing when no turn is running.
    */
-  interrupt(ticketId: TicketId): Promise<void>
+  interrupt(key: SessionKey): Promise<void>
 
   /**
    * Live messages from now on, recorded events and deltas alike.
@@ -71,17 +72,22 @@ export interface SessionRegistry {
    * first, then subscribes. The listener must not throw. Unsubscribing twice
    * is safe.
    */
-  subscribe(ticketId: TicketId, listener: (message: StreamMessage) => void): Unsubscribe
+  subscribe(key: SessionKey, listener: (message: StreamMessage) => void): Unsubscribe
 
   /**
    * Ends the session and denies everything still held at the gate.
    *
-   * Idempotent. The transcript is kept, so the ticket can be attached again.
+   * Idempotent. The transcript is kept, so the session can be attached again.
    */
-  close(ticketId: TicketId): Promise<void>
+  close(key: SessionKey): Promise<void>
 }
 
-/** The container has no Claude Code login; `claude` must be run in it once. */
+/** No workspace is registered under that id. */
+export class UnknownWorkspaceError extends Error {
+  override readonly name = 'UnknownWorkspaceError'
+}
+
+/** Claude Code has no login; `claude` must be run once where the agent runs. */
 export class AuthRequiredError extends Error {
   override readonly name = 'AuthRequiredError'
 }

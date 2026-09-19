@@ -1,4 +1,4 @@
-import type { TicketId } from '@keel-web/protocol'
+import type { TicketId, WorkspaceId } from '@keel-web/protocol'
 
 /**
  * Which centre view is showing.
@@ -9,7 +9,9 @@ import type { TicketId } from '@keel-web/protocol'
 export type CentreView = 'none'
 
 export interface Route {
-  /** Absent when no ticket is selected. */
+  /** Absent when no workspace is selected. */
+  workspaceId?: WorkspaceId
+  /** Absent when no ticket is selected, and meaningless without a workspace. */
   ticketId?: TicketId
   view: CentreView
 }

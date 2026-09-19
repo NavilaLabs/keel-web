@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import type { ClientCommand, ServerEvent, StreamMessage } from '@keel-web/protocol'
+import type { ClientCommand, ServerEvent, SessionKey, StreamMessage } from '@keel-web/protocol'
 import type { LoggerVariables } from '../logging/types.js'
-import { AuthRequiredError } from '../sessions/types.js'
+import { AuthRequiredError, UnknownWorkspaceError } from '../sessions/types.js'
 import type { ChatDependencies, CreateChatRoutes } from './types.js'
 
 function isRecordedEvent(message: StreamMessage): message is ServerEvent {
@@ -27,11 +27,16 @@ function parseCommand(body: unknown): ClientCommand | undefined {
 }
 
 export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencies) => {
-  const { sessions, transcript } = dependencies
+  const { sessions, transcript, workspaces } = dependencies
   const routes = new Hono<{ Variables: LoggerVariables }>()
 
-  routes.get('/tickets/:ticketId/events', (context) => {
-    const ticketId = context.req.param('ticketId')
+  const keyOf = (context: { req: { param: (name: string) => string } }): SessionKey => ({
+    workspaceId: context.req.param('workspaceId'),
+    ticketId: context.req.param('ticketId'),
+  })
+
+  routes.get('/workspaces/:workspaceId/tickets/:ticketId/events', (context) => {
+    const key = keyOf(context)
     const logger = context.get('logger')
     const lastEventId = Number(context.req.header('Last-Event-ID') ?? '0')
     const resumeFrom = Number.isFinite(lastEventId) && lastEventId > 0 ? lastEventId : 0
@@ -42,20 +47,21 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
       let lastSequence = resumeFrom
 
       try {
-        await sessions.attach(ticketId)
+        await sessions.attach(key)
       } catch (error) {
         const authentication = error instanceof AuthRequiredError
+        const unknown = error instanceof UnknownWorkspaceError
         await stream.writeSSE({
           event: 'session.failed',
           data: JSON.stringify({
             type: 'session.failed',
-            ticketId,
+            ...key,
             seq: 0,
-            code: authentication ? 'auth_required' : 'startup_failed',
+            code: authentication && !unknown ? 'auth_required' : 'startup_failed',
             message: error instanceof Error ? error.message : String(error),
           }),
         })
-        logger.warn({ ticketId, err: String(error) }, 'stream could not attach a session')
+        logger.warn({ ...key, err: String(error) }, 'stream could not attach a session')
         return
       }
 
@@ -81,7 +87,7 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
         eventsSent += 1
       }
 
-      const unsubscribe = sessions.subscribe(ticketId, (message) => {
+      const unsubscribe = sessions.subscribe(key, (message) => {
         if (!live) {
           buffered.push(message)
           return
@@ -96,7 +102,7 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
       stream.onAbort(abort)
 
       try {
-        for (const event of await transcript.since(ticketId, resumeFrom)) {
+        for (const event of await transcript.since(key, resumeFrom)) {
           await send(event)
         }
         for (const message of buffered) {
@@ -104,7 +110,7 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
         }
         live = true
 
-        logger.info({ ticketId, resumeFrom }, 'stream attached')
+        logger.info({ ...key, resumeFrom }, 'stream attached')
         await new Promise<void>((resolve) => {
           context.req.raw.signal.addEventListener('abort', () => resolve(), { once: true })
         })
@@ -112,7 +118,7 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
         unsubscribe()
         logger.info(
           {
-            ticketId,
+            ...key,
             durationMs: Date.now() - startedAt,
             eventsSent,
             lastEventId: lastSequence,
@@ -123,8 +129,11 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
     })
   })
 
-  routes.post('/tickets/:ticketId/input', async (context) => {
-    const ticketId = context.req.param('ticketId')
+  routes.post('/workspaces/:workspaceId/tickets/:ticketId/input', async (context) => {
+    const key = keyOf(context)
+    if (workspaces.find(key.workspaceId) === undefined) {
+      return context.json({ error: 'Unknown workspace.' }, 404)
+    }
 
     let body: unknown
     try {
@@ -138,21 +147,17 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
 
     try {
       if (command.command === 'message') {
-        await sessions.send(ticketId, command.text)
+        await sessions.send(key, command.text)
       } else if (command.command === 'interrupt') {
-        await sessions.interrupt(ticketId)
+        await sessions.interrupt(key)
       } else {
-        const answered = await sessions.answerPermission(
-          ticketId,
-          command.requestId,
-          command.decision,
-        )
+        const answered = await sessions.answerPermission(key, command.requestId, command.decision)
         if (!answered) {
           return context.json({ error: 'That permission request is no longer held.' }, 409)
         }
       }
     } catch (error) {
-      context.get('logger').warn({ ticketId, err: String(error) }, 'input rejected')
+      context.get('logger').warn({ ...key, err: String(error) }, 'input rejected')
       return context.json({ error: 'This ticket has no session.' }, 404)
     }
 

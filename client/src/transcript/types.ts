@@ -2,7 +2,7 @@ import type {
   PermissionDecision,
   PermissionRequest,
   ServerEvent,
-  TicketId,
+  SessionKey,
 } from '@keel-web/protocol'
 
 /**
@@ -38,19 +38,19 @@ export type Fold = (events: readonly ServerEvent[]) => RenderItem[]
 export type Unsubscribe = () => void
 
 /**
- * Holds one ticket's transcript and its live draft.
+ * Holds one session's transcript and its live draft.
  *
  * The connection belongs to the store rather than to a component, so mounting
  * and unmounting never opens or closes a stream.
  */
 export interface TranscriptStore {
   /**
-   * Opens the ticket's stream, replaying from what is already held.
+   * Opens the session's stream, replaying from what is already held.
    *
-   * Idempotent for the ticket already connected. Connecting to another ticket
-   * closes the previous stream first.
+   * Idempotent for the session already connected. Connecting to another
+   * session, in this workspace or another, closes the previous stream first.
    */
-  connect: (ticketId: TicketId) => void
+  connect: (key: SessionKey) => void
 
   /** Closes the stream and keeps what was received. Safe without a connection. */
   disconnect: () => void

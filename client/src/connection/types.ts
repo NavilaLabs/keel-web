@@ -1,6 +1,5 @@
-import type { AssistantDelta, ClientCommand, ServerEvent, TicketId } from '@keel-web/protocol'
+import type { AssistantDelta, ClientCommand, ServerEvent, SessionKey } from '@keel-web/protocol'
 
-/** Why a stream ended for good rather than being retried. */
 export type FatalReason = 'auth_required' | 'startup_failed'
 
 export interface StreamHandlers {
@@ -24,16 +23,18 @@ export type CloseStream = () => void
 /** What became of a command the browser sent. */
 export type SendResult = 'accepted' | 'malformed' | 'no_session' | 'not_held'
 
+/** Why a stream ended for good rather than being retried. */
+
 export interface Connection {
   /**
-   * Opens the event stream for a ticket and replays everything after `afterSeq`.
+   * Opens the event stream for a session and replays everything after `afterSeq`.
    *
    * Pass 0 to replay the whole transcript. Reconnection is the browser's job;
    * the caller sees a continuous series of events across it. A session failure
    * that retrying cannot fix closes the stream and reports `onFatal`, so the
    * caller never has to guard against a reconnect loop.
    */
-  open: (ticketId: TicketId, afterSeq: number, handlers: StreamHandlers) => CloseStream
+  open: (key: SessionKey, afterSeq: number, handlers: StreamHandlers) => CloseStream
 
   /**
    * Sends one command.
@@ -43,7 +44,7 @@ export interface Connection {
    * ended. `not_held` means someone else answered that permission request
    * first, which is an outcome, not an error.
    */
-  send: (ticketId: TicketId, command: ClientCommand) => Promise<SendResult>
+  send: (key: SessionKey, command: ClientCommand) => Promise<SendResult>
 }
 
 export type CreateConnection = (baseUrl: string) => Connection

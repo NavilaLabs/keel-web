@@ -10,6 +10,26 @@ export type Sequence = number
 
 export type TicketId = string
 
+/**
+ * A repository keel-web works in.
+ *
+ * Stable across restarts, since it keys sessions, transcripts and URLs. It is
+ * not a path: a workspace can move on disk without becoming a different
+ * workspace.
+ */
+export type WorkspaceId = string
+
+/**
+ * What a session belongs to.
+ *
+ * Ticket 3 in one repository is not ticket 3 in another, so neither half
+ * identifies a session on its own.
+ */
+export interface SessionKey {
+  workspaceId: WorkspaceId
+  ticketId: TicketId
+}
+
 export type RequestId = string
 
 export type ToolUseId = string
@@ -72,8 +92,8 @@ export type PermissionDecision =
  */
 export type ServerEvent = {
   seq: Sequence
-  ticketId: TicketId
-} & ServerEventBody
+} & SessionKey &
+  ServerEventBody
 
 export type ServerEventBody =
   | { type: 'session.started'; sessionId: string; resumed: boolean }
@@ -101,9 +121,8 @@ export type SessionFailureCode = 'auth_required' | 'startup_failed' | 'agent_err
  * reconnects sees the finished `assistant.message` instead. A client that
  * ignores deltas entirely still renders a correct transcript.
  */
-export interface AssistantDelta {
+export interface AssistantDelta extends SessionKey {
   type: 'assistant.delta'
-  ticketId: TicketId
   text: string
 }
 

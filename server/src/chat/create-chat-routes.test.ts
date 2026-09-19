@@ -1,15 +1,26 @@
 import { Hono } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
-import type { PermissionDecision, ServerEvent, TicketId } from '@keel-web/protocol'
+import type { PermissionDecision, ServerEvent, SessionKey } from '@keel-web/protocol'
 import type { LoggerVariables } from '../logging/types.js'
 import type { SessionRegistry } from '../sessions/types.js'
 import type { TranscriptLog } from '../transcript/types.js'
+import type { Workspace, WorkspaceRegistry } from '../workspaces/types.js'
 import { createChatRoutes } from './create-chat-routes.js'
+
+const four: SessionKey = { workspaceId: 'w1', ticketId: '4' }
+const known: Workspace[] = [{ id: 'w1', name: 'one', path: '/code', ticketRepository: '/tickets' }]
+
+function workspaceStub(workspaces: Workspace[] = known): WorkspaceRegistry {
+  return {
+    list: () => workspaces,
+    find: (id) => workspaces.find((workspace) => workspace.id === id),
+  }
+}
 
 function registryStub(overrides: Partial<SessionRegistry> = {}): SessionRegistry {
   return {
-    attach: vi.fn(async (ticketId: TicketId) => ({
-      ticketId,
+    attach: vi.fn(async (key: SessionKey) => ({
+      key,
       sessionId: 's1',
       pendingPermissions: () => [],
     })),
@@ -30,7 +41,11 @@ function transcriptStub(events: ServerEvent[] = []): TranscriptLog {
   } as unknown as TranscriptLog
 }
 
-function appWith(sessions: SessionRegistry, transcript = transcriptStub()) {
+function appWith(
+  sessions: SessionRegistry,
+  transcript = transcriptStub(),
+  workspaces = workspaceStub(),
+) {
   const app = new Hono<{ Variables: LoggerVariables }>()
   const silent = {
     info: () => undefined,
@@ -44,12 +59,12 @@ function appWith(sessions: SessionRegistry, transcript = transcriptStub()) {
     context.set('logger', silent)
     await next()
   })
-  app.route('/', createChatRoutes({ sessions, transcript }))
+  app.route('/', createChatRoutes({ sessions, transcript, workspaces }))
   return app
 }
 
 function postInput(sessions: SessionRegistry, body: unknown) {
-  return appWith(sessions).request('/tickets/4/input', {
+  return appWith(sessions).request('/workspaces/w1/tickets/4/input', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: typeof body === 'string' ? body : JSON.stringify(body),
@@ -97,7 +112,7 @@ describe('chat input endpoint', () => {
     const response = await postInput(sessions, { command: 'message', text: 'hello' })
 
     expect(response.status).toBe(204)
-    expect(sessions.send).toHaveBeenCalledWith('4', 'hello')
+    expect(sessions.send).toHaveBeenCalledWith(four, 'hello')
   })
 
   it('rejects a body that is not JSON', async () => {
@@ -133,6 +148,18 @@ describe('chat input endpoint', () => {
     expect((await postInput(sessions, { command: 'message', text: 'hi' })).status).toBe(404)
   })
 
+  it('refuses a workspace it does not know', async () => {
+    const app = appWith(registryStub())
+
+    const response = await app.request('/workspaces/gone/tickets/4/input', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ command: 'interrupt' }),
+    })
+
+    expect(response.status).toBe(404)
+  })
+
   it('never starts a session from the input endpoint', async () => {
     const sessions = registryStub()
 
@@ -145,12 +172,12 @@ describe('chat input endpoint', () => {
 describe('chat event stream', () => {
   it('replays the transcript before going live', async () => {
     const recorded: ServerEvent[] = [
-      { seq: 1, ticketId: '4', type: 'user.message', text: 'a' },
-      { seq: 2, ticketId: '4', type: 'assistant.message', text: 'b' },
+      { seq: 1, ...four, type: 'user.message', text: 'a' },
+      { seq: 2, ...four, type: 'assistant.message', text: 'b' },
     ]
     const app = appWith(registryStub(), transcriptStub(recorded))
 
-    const body = await readStream(app, '/tickets/4/events', { 'Last-Event-ID': '1' })
+    const body = await readStream(app, '/workspaces/w1/tickets/4/events', { 'Last-Event-ID': '1' })
 
     expect(body).toContain('id: 2')
     expect(body).not.toContain('"seq":1')
@@ -162,7 +189,7 @@ describe('chat event stream', () => {
     })
     const app = appWith(sessions)
 
-    const body = await (await app.request('/tickets/4/events')).text()
+    const body = await (await app.request('/workspaces/w1/tickets/4/events')).text()
 
     expect(body).toContain('session.failed')
   })
@@ -182,7 +209,7 @@ describe('chat event stream', () => {
     })
     const app = appWith(sessions, transcript)
 
-    const response = await app.request('/tickets/4/events')
+    const response = await app.request('/workspaces/w1/tickets/4/events')
     await waitFor(() => order.length === 2)
     await response.body?.cancel()
 

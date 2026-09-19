@@ -1,4 +1,4 @@
-import type { PermissionDecision, ServerEvent, TicketId } from '@keel-web/protocol'
+import type { PermissionDecision, ServerEvent, SessionKey } from '@keel-web/protocol'
 import type { CloseStream, Connection } from '../connection/types.ts'
 import { fold } from './fold.ts'
 import type { RenderItem, TranscriptStore, Unsubscribe } from './types.ts'
@@ -28,7 +28,7 @@ export function createTranscriptStore(options: TranscriptStoreOptions): Transcri
   const transcriptListeners = new Set<() => void>()
   const draftListeners = new Set<() => void>()
 
-  let ticketId: TicketId | undefined
+  let key: SessionKey | undefined
   let close: CloseStream | undefined
   let events: ServerEvent[] = []
   let highestSeq = 0
@@ -73,16 +73,18 @@ export function createTranscriptStore(options: TranscriptStoreOptions): Transcri
     draft = ''
   }
 
-  async function command(send: () => Promise<unknown>): Promise<void> {
-    if (ticketId === undefined) return
-    await send()
+  async function command(send: (key: SessionKey) => Promise<unknown>): Promise<void> {
+    if (key === undefined) return
+    await send(key)
   }
 
   return {
     connect(next) {
-      if (ticketId === next && close !== undefined) return
+      const same =
+        key !== undefined && key.workspaceId === next.workspaceId && key.ticketId === next.ticketId
+      if (same && close !== undefined) return
       reset()
-      ticketId = next
+      key = next
       notify(transcriptListeners)
       notify(draftListeners)
 
@@ -126,17 +128,17 @@ export function createTranscriptStore(options: TranscriptStoreOptions): Transcri
     },
 
     send(text) {
-      return command(() => connection.send(ticketId as TicketId, { command: 'message', text }))
+      return command((current) => connection.send(current, { command: 'message', text }))
     },
 
     answer(requestId, decision: PermissionDecision) {
-      return command(() =>
-        connection.send(ticketId as TicketId, { command: 'permission', requestId, decision }),
+      return command((current) =>
+        connection.send(current, { command: 'permission', requestId, decision }),
       )
     },
 
     interrupt() {
-      return command(() => connection.send(ticketId as TicketId, { command: 'interrupt' }))
+      return command((current) => connection.send(current, { command: 'interrupt' }))
     },
   }
 }

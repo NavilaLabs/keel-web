@@ -1,26 +1,29 @@
-import type { ServerEvent, ServerEventBody, TicketId } from '@keel-web/protocol'
+import type { ServerEvent, ServerEventBody, SessionKey } from '@keel-web/protocol'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Connection, StreamHandlers } from '../connection/types.ts'
 import { createTranscriptStore } from './create-transcript-store.ts'
 import type { TranscriptStore } from './types.ts'
 
+const four: SessionKey = { workspaceId: 'w1', ticketId: '4' }
+const five: SessionKey = { workspaceId: 'w1', ticketId: '5' }
+
 function event(seq: number, body: ServerEventBody): ServerEvent {
-  return { seq, ticketId: '4', ...body } as ServerEvent
+  return { seq, ...four, ...body } as ServerEvent
 }
 
 function connectionStub() {
   let handlers: StreamHandlers | undefined
-  const closed: TicketId[] = []
+  const closed: SessionKey[] = []
   const sent: unknown[] = []
   let opens = 0
 
   const connection: Connection = {
-    open: (ticketId, _afterSeq, given) => {
+    open: (key, _afterSeq, given) => {
       opens += 1
       handlers = given
-      return () => closed.push(ticketId)
+      return () => closed.push(key)
     },
-    send: async (_ticketId, command) => {
+    send: async (_key, command) => {
       sent.push(command)
       return 'accepted'
     },
@@ -29,7 +32,7 @@ function connectionStub() {
   return {
     connection,
     emit: (seq: number, body: ServerEventBody) => handlers?.onEvent(event(seq, body)),
-    delta: (text: string) => handlers?.onDelta({ type: 'assistant.delta', ticketId: '4', text }),
+    delta: (text: string) => handlers?.onDelta({ type: 'assistant.delta', ...four, text }),
     fatal: () => handlers?.onFatal('auth_required'),
     closed: () => closed,
     sent: () => sent,
@@ -55,7 +58,7 @@ describe('transcript store', () => {
   })
 
   it('returns the same transcript reference until something recorded arrives', () => {
-    store.connect('4')
+    store.connect(four)
     const before = store.getTranscript()
 
     store.getTranscript()
@@ -66,7 +69,7 @@ describe('transcript store', () => {
   })
 
   it('leaves the transcript reference alone while tokens stream', () => {
-    store.connect('4')
+    store.connect(four)
     stub.emit(1, { type: 'user.message', text: 'hello' })
     const before = store.getTranscript()
 
@@ -78,7 +81,7 @@ describe('transcript store', () => {
   })
 
   it('notifies only the draft when a token arrives', () => {
-    store.connect('4')
+    store.connect(four)
     const onTranscript = vi.fn()
     const onDraft = vi.fn()
     store.subscribeTranscript(onTranscript)
@@ -98,7 +101,7 @@ describe('transcript store', () => {
         flush = run
       },
     })
-    batched.connect('4')
+    batched.connect(four)
     const onDraft = vi.fn()
     batched.subscribeDraft(onDraft)
 
@@ -112,7 +115,7 @@ describe('transcript store', () => {
   })
 
   it('clears the draft when the finished message lands', () => {
-    store.connect('4')
+    store.connect(four)
     stub.delta('hel')
     stub.delta('lo')
 
@@ -123,7 +126,7 @@ describe('transcript store', () => {
   })
 
   it('ignores an event it already holds, so a replay changes nothing', () => {
-    store.connect('4')
+    store.connect(four)
     stub.emit(1, { type: 'user.message', text: 'hello' })
     const after = store.getTranscript()
 
@@ -133,25 +136,33 @@ describe('transcript store', () => {
     expect(store.getTranscript()).toHaveLength(1)
   })
 
-  it('opens one stream for the ticket it is already on', () => {
-    store.connect('4')
-    store.connect('4')
+  it('opens one stream for the session it is already on', () => {
+    store.connect(four)
+    store.connect(four)
 
     expect(stub.opens()).toBe(1)
   })
 
-  it('closes the previous stream when the ticket changes', () => {
-    store.connect('4')
+  it('reconnects for the same ticket number in another workspace', () => {
+    store.connect(four)
+    store.connect({ workspaceId: 'w2', ticketId: '4' })
+
+    expect(stub.opens()).toBe(2)
+    expect(stub.closed()).toEqual([four])
+  })
+
+  it('closes the previous stream when the session changes', () => {
+    store.connect(four)
     stub.emit(1, { type: 'user.message', text: 'hello' })
 
-    store.connect('5')
+    store.connect(five)
 
-    expect(stub.closed()).toEqual(['4'])
+    expect(stub.closed()).toEqual([four])
     expect(store.getTranscript()).toEqual([])
   })
 
   it('stops delivering after unsubscribing', () => {
-    store.connect('4')
+    store.connect(four)
     const listener = vi.fn()
     const unsubscribe = store.subscribeTranscript(listener)
     unsubscribe()
@@ -163,18 +174,18 @@ describe('transcript store', () => {
   })
 
   it('keeps what it received when it disconnects', () => {
-    store.connect('4')
+    store.connect(four)
     stub.emit(1, { type: 'user.message', text: 'hello' })
 
     store.disconnect()
     store.disconnect()
 
     expect(store.getTranscript()).toHaveLength(1)
-    expect(stub.closed()).toEqual(['4'])
+    expect(stub.closed()).toEqual([four])
   })
 
   it('sends a message, an answer and an interrupt as commands', async () => {
-    store.connect('4')
+    store.connect(four)
 
     await store.send('hello')
     await store.answer('r1', { decision: 'allow' })
@@ -194,7 +205,7 @@ describe('transcript store', () => {
   })
 
   it('keeps the transcript after a fatal stream failure', () => {
-    store.connect('4')
+    store.connect(four)
     stub.emit(1, { type: 'session.failed', code: 'auth_required', message: 'run claude once' })
     stub.fatal()
 

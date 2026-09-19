@@ -13,7 +13,13 @@ let snapshot: Route = router.current()
 
 function refresh(): void {
   const next = router.current()
-  if (next.ticketId === snapshot.ticketId && next.view === snapshot.view) return
+  if (
+    next.workspaceId === snapshot.workspaceId &&
+    next.ticketId === snapshot.ticketId &&
+    next.view === snapshot.view
+  ) {
+    return
+  }
   snapshot = next
   for (const listener of listeners) listener()
 }

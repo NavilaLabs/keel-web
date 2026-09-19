@@ -1,15 +1,13 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import type { Sequence, ServerEvent, ServerEventBody, TicketId } from '@keel-web/protocol'
+import { dirname, join } from 'node:path'
+import type { Sequence, ServerEvent, ServerEventBody, SessionKey } from '@keel-web/protocol'
+import type { WorkspaceRegistry } from '../workspaces/types.js'
 import type { CreateTranscriptLog, TranscriptLog } from './types.js'
 
-const fileNamePattern = /^[A-Za-z0-9._-]+$/
+const safeSegment = /^[A-Za-z0-9._-]+$/
 
-function fileFor(directory: string, ticketId: TicketId): string {
-  if (!fileNamePattern.test(ticketId)) {
-    throw new Error(`Ticket id is not usable as a file name: ${ticketId}`)
-  }
-  return join(directory, `${ticketId}.jsonl`)
+function keyOf(key: SessionKey): string {
+  return `${key.workspaceId}/${key.ticketId}`
 }
 
 async function readEvents(file: string): Promise<ServerEvent[]> {
@@ -26,49 +24,75 @@ async function readEvents(file: string): Promise<ServerEvent[]> {
     .map((line) => JSON.parse(line) as ServerEvent)
 }
 
-export const createTranscriptLog: CreateTranscriptLog = (directory: string): TranscriptLog => {
-  const lastSequences = new Map<TicketId, Sequence>()
-  const writes = new Map<TicketId, Promise<unknown>>()
+export const createTranscriptLog: CreateTranscriptLog = (
+  workspaces: WorkspaceRegistry,
+): TranscriptLog => {
+  const lastSequences = new Map<string, Sequence>()
+  const writes = new Map<string, Promise<unknown>>()
 
-  // Keeps one append at a time per ticket, so sequence numbers cannot interleave.
-  function serialise<T>(ticketId: TicketId, work: () => Promise<T>): Promise<T> {
-    const previous = writes.get(ticketId) ?? Promise.resolve()
+  /** Throws rather than falling back, so a missing ticket repository is visible. */
+  function fileFor(key: SessionKey): string {
+    if (!safeSegment.test(key.ticketId)) {
+      throw new Error(`Ticket id is not usable as a file name: ${key.ticketId}`)
+    }
+    const workspace = workspaces.find(key.workspaceId)
+    if (workspace === undefined) throw new Error(`Unknown workspace: ${key.workspaceId}`)
+    if (workspace.ticketRepository === undefined) {
+      throw new Error(`Workspace ${workspace.name} has no ticket repository to record into.`)
+    }
+    return join(workspace.ticketRepository, 'tickets', key.ticketId, 'transcript.jsonl')
+  }
+
+  // Keeps one append at a time per session, so sequence numbers cannot interleave.
+  function serialise<T>(key: SessionKey, work: () => Promise<T>): Promise<T> {
+    const id = keyOf(key)
+    const previous = writes.get(id) ?? Promise.resolve()
     const next = previous.then(work, work)
     writes.set(
-      ticketId,
+      id,
       next.catch(() => undefined),
     )
     return next
   }
 
-  async function currentLastSequence(ticketId: TicketId): Promise<Sequence> {
-    const known = lastSequences.get(ticketId)
+  async function currentLastSequence(key: SessionKey): Promise<Sequence> {
+    const known = lastSequences.get(keyOf(key))
     if (known !== undefined) return known
-    const events = await readEvents(fileFor(directory, ticketId))
+    const events = await readEvents(fileFor(key))
     const last = events.at(-1)?.seq ?? 0
-    lastSequences.set(ticketId, last)
+    lastSequences.set(keyOf(key), last)
     return last
   }
 
   return {
-    append(ticketId, body: ServerEventBody) {
-      return serialise(ticketId, async () => {
-        const seq = (await currentLastSequence(ticketId)) + 1
-        const event = { seq, ticketId, ...body } as ServerEvent
-        await mkdir(directory, { recursive: true })
-        await appendFile(fileFor(directory, ticketId), `${JSON.stringify(event)}\n`, 'utf8')
-        lastSequences.set(ticketId, seq)
+    append(key, body: ServerEventBody) {
+      return serialise(key, async () => {
+        const file = fileFor(key)
+        const seq = (await currentLastSequence(key)) + 1
+        const event = { seq, ...key, ...body } as ServerEvent
+        await mkdir(dirname(file), { recursive: true })
+        await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8')
+        lastSequences.set(keyOf(key), seq)
         return event
       })
     },
 
-    async since(ticketId, afterSeq) {
-      const events = await readEvents(fileFor(directory, ticketId))
+    async since(key, afterSeq) {
+      const events = await readEvents(fileFor(key))
       return events.filter((event) => event.seq > afterSeq)
     },
 
-    lastSequence(ticketId) {
-      return serialise(ticketId, () => currentLastSequence(ticketId))
+    lastSequence(key) {
+      return serialise(key, () => currentLastSequence(key))
+    },
+
+    async lastSessionId(key) {
+      const events = await readEvents(fileFor(key))
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index]
+        if (event?.type === 'session.started') return event.sessionId
+      }
+      return undefined
     },
   }
 }

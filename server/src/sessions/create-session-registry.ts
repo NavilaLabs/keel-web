@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   query,
@@ -11,17 +11,19 @@ import type {
   PermissionDecision,
   PermissionRequest,
   Question,
+  SessionKey,
   StreamMessage,
-  TicketId,
 } from '@keel-web/protocol'
 import type { Logger } from '../logging/types.js'
 import { createPermissionGate } from '../permissions/index.js'
 import type { PermissionGate } from '../permissions/types.js'
 import type { TranscriptLog } from '../transcript/types.js'
+import type { WorkspaceRegistry } from '../workspaces/types.js'
 import { deltaTextOf, normalise } from './normalise.js'
 import {
   AuthRequiredError,
   SessionStartError,
+  UnknownWorkspaceError,
   type Session,
   type SessionRegistry,
   type Unsubscribe,
@@ -40,11 +42,9 @@ export type RunQuery = (parameters: {
 }) => AsyncIterable<SDKMessage>
 
 export interface SessionRegistryOptions {
-  /** Working directory of the agent: the code repository, as in the terminal. */
-  workingDirectory: string
-  /** Where the ticket-to-session mapping is kept. */
-  stateDirectory: string
-  /** Claude Code's configuration directory, holding the container's credentials. */
+  /** Resolves a workspace to the repository an agent runs in. */
+  workspaces: WorkspaceRegistry
+  /** Claude Code's configuration directory, holding the credentials. */
   configDirectory: string
   transcript: TranscriptLog
   logger: Logger
@@ -55,7 +55,7 @@ export interface SessionRegistryOptions {
 }
 
 interface SessionState {
-  ticketId: TicketId
+  key: SessionKey
   sessionId: string
   gate: PermissionGate
   listeners: Set<(message: StreamMessage) => void>
@@ -120,28 +120,30 @@ function looksLikeAuthenticationFailure(text: string): boolean {
   return authenticationHints.some((hint) => lowered.includes(hint))
 }
 
+function identity(key: SessionKey): string {
+  return `${key.workspaceId}/${key.ticketId}`
+}
+
 export function createSessionRegistry(options: SessionRegistryOptions): SessionRegistry {
-  const { workingDirectory, stateDirectory, configDirectory, transcript, logger } = options
+  const { workspaces, configDirectory, transcript, logger } = options
   const startTimeoutMs = options.startTimeoutMs ?? 60_000
   const runQuery = options.runQuery ?? query
 
-  const sessions = new Map<TicketId, SessionState>()
-  const starting = new Map<TicketId, Promise<SessionState>>()
-  const sessionIdsFile = join(stateDirectory, 'sessions.json')
+  const sessions = new Map<string, SessionState>()
+  const starting = new Map<string, Promise<SessionState>>()
 
-  async function readSessionIds(): Promise<Record<TicketId, string>> {
-    try {
-      return JSON.parse(await readFile(sessionIdsFile, 'utf8')) as Record<TicketId, string>
-    } catch {
-      return {}
+  /** The repository the agent runs in, or a rejection. */
+  function repositoryOf(key: SessionKey): string {
+    const workspace = workspaces.find(key.workspaceId)
+    if (workspace === undefined) {
+      throw new UnknownWorkspaceError(`No workspace is registered as ${key.workspaceId}.`)
     }
-  }
-
-  async function rememberSessionId(ticketId: TicketId, sessionId: string): Promise<void> {
-    const known = await readSessionIds()
-    known[ticketId] = sessionId
-    await mkdir(stateDirectory, { recursive: true })
-    await writeFile(sessionIdsFile, `${JSON.stringify(known, null, 2)}\n`, 'utf8')
+    if (workspace.ticketRepository === undefined) {
+      throw new UnknownWorkspaceError(
+        `Workspace ${workspace.name} has no keel configuration, so it cannot hold a session.`,
+      )
+    }
+    return workspace.path
   }
 
   async function assertLoggedIn(): Promise<void> {
@@ -162,7 +164,7 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
     state: SessionState,
     body: Parameters<TranscriptLog['append']>[1],
   ): Promise<void> {
-    broadcast(state, await transcript.append(state.ticketId, body))
+    broadcast(state, await transcript.append(state.key, body))
   }
 
   function permissionResultOf(
@@ -181,9 +183,13 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
     return { behavior: 'allow' }
   }
 
-  function optionsFor(state: SessionState, resume: string | undefined): Options {
+  function optionsFor(
+    state: SessionState,
+    repository: string,
+    resume: string | undefined,
+  ): Options {
     return {
-      cwd: workingDirectory,
+      cwd: repository,
       resume,
       includePartialMessages: true,
       abortController: state.abort,
@@ -229,22 +235,25 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
     }
   }
 
-  async function start(ticketId: TicketId): Promise<SessionState> {
+  async function start(key: SessionKey): Promise<SessionState> {
+    const repository = repositoryOf(key)
     await assertLoggedIn()
 
     const state: SessionState = {
-      ticketId,
+      key,
       sessionId: '',
       gate: createPermissionGate(),
       listeners: new Set(),
       input: createInputQueue(),
       abort: new AbortController(),
-      logger: logger.child({ ticketId }),
+      logger: logger.child({ ...key }),
     }
 
-    const known = await readSessionIds()
-    const resume = known[ticketId]
-    const run = runQuery({ prompt: state.input.stream, options: optionsFor(state, resume) })
+    const resume = await transcript.lastSessionId(key)
+    const run = runQuery({
+      prompt: state.input.stream,
+      options: optionsFor(state, repository, resume),
+    })
 
     let announce: ((sessionId: string) => void) | undefined
     let fail: ((error: Error) => void) | undefined
@@ -258,15 +267,13 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
         for await (const message of run) {
           const delta = deltaTextOf(message)
           if (delta !== undefined) {
-            broadcast(state, { type: 'assistant.delta', ticketId, text: delta })
+            broadcast(state, { type: 'assistant.delta', ...key, text: delta })
             continue
           }
           for (const body of normalise(message)) {
             if (body.type === 'session.started') {
-              const started = { ...body, resumed: resume !== undefined }
               state.sessionId = body.sessionId
-              await rememberSessionId(ticketId, body.sessionId)
-              await record(state, started)
+              await record(state, { ...body, resumed: resume !== undefined })
               announce?.(body.sessionId)
               continue
             }
@@ -287,7 +294,7 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
         fail?.(authentication ? new AuthRequiredError(message) : new SessionStartError(message))
       } finally {
         state.gate.close()
-        sessions.delete(ticketId)
+        sessions.delete(identity(key))
       }
     })()
 
@@ -300,7 +307,7 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
     })
 
     await Promise.race([ready, timeout])
-    sessions.set(ticketId, state)
+    sessions.set(identity(key), state)
     state.logger.info(
       { sessionId: state.sessionId, resumed: resume !== undefined },
       'session ready',
@@ -310,62 +317,63 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
 
   function toSession(state: SessionState): Session {
     return {
-      ticketId: state.ticketId,
+      key: state.key,
       sessionId: state.sessionId,
       pendingPermissions: () => state.gate.pending(),
     }
   }
 
-  function sessionFor(ticketId: TicketId): SessionState {
-    const state = sessions.get(ticketId)
-    if (state === undefined) throw new Error(`Ticket ${ticketId} has no session.`)
+  function sessionFor(key: SessionKey): SessionState {
+    const state = sessions.get(identity(key))
+    if (state === undefined) throw new Error(`No session for ${identity(key)}.`)
     return state
   }
 
   return {
-    async attach(ticketId) {
-      const running = sessions.get(ticketId)
+    async attach(key) {
+      const id = identity(key)
+      const running = sessions.get(id)
       if (running !== undefined) return toSession(running)
 
-      const inFlight = starting.get(ticketId)
+      const inFlight = starting.get(id)
       if (inFlight !== undefined) return toSession(await inFlight)
 
-      const attempt = start(ticketId).finally(() => starting.delete(ticketId))
-      starting.set(ticketId, attempt)
+      const attempt = start(key).finally(() => starting.delete(id))
+      starting.set(id, attempt)
       return toSession(await attempt)
     },
 
-    async send(ticketId, text) {
-      const state = sessionFor(ticketId)
+    async send(key, text) {
+      const state = sessionFor(key)
       await record(state, { type: 'user.message', text })
       state.input.push(text)
     },
 
-    answerPermission(ticketId, requestId, decision) {
-      return Promise.resolve(sessionFor(ticketId).gate.answer(requestId, decision))
+    answerPermission(key, requestId, decision) {
+      return Promise.resolve(sessionFor(key).gate.answer(requestId, decision))
     },
 
-    async interrupt(ticketId) {
-      const state = sessions.get(ticketId)
+    async interrupt(key) {
+      const state = sessions.get(identity(key))
       if (state === undefined) return
       state.abort.abort()
     },
 
-    subscribe(ticketId, listener): Unsubscribe {
-      const state = sessionFor(ticketId)
+    subscribe(key, listener): Unsubscribe {
+      const state = sessionFor(key)
       state.listeners.add(listener)
       return () => {
         state.listeners.delete(listener)
       }
     },
 
-    async close(ticketId) {
-      const state = sessions.get(ticketId)
+    async close(key) {
+      const state = sessions.get(identity(key))
       if (state === undefined) return
       state.gate.close()
       state.input.close()
       state.abort.abort()
-      sessions.delete(ticketId)
+      sessions.delete(identity(key))
       state.logger.info('session closed')
     },
   }

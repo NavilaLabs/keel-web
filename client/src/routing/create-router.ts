@@ -1,15 +1,23 @@
 import type { Route, Router, Unsubscribe } from './types.ts'
 
-const ticketPath = /^\/tickets\/([^/]+)$/
+const workspaceTicket = /^\/workspaces\/([^/]+)(?:\/tickets\/([^/]+))?$/
 
 function parse(pathname: string): Route {
-  const match = ticketPath.exec(pathname)
-  const ticketId = match?.[1]
-  return ticketId === undefined ? { view: 'none' } : { ticketId, view: 'none' }
+  const match = workspaceTicket.exec(pathname)
+  const workspaceId = match?.[1]
+  if (workspaceId === undefined) return { view: 'none' }
+  const ticketId = match?.[2]
+  return ticketId === undefined
+    ? { workspaceId, view: 'none' }
+    : { workspaceId, ticketId, view: 'none' }
 }
 
 function toPath(route: Route): string {
-  return route.ticketId === undefined ? '/' : `/tickets/${encodeURIComponent(route.ticketId)}`
+  if (route.workspaceId === undefined) return '/'
+  const workspace = `/workspaces/${encodeURIComponent(route.workspaceId)}`
+  return route.ticketId === undefined
+    ? workspace
+    : `${workspace}/tickets/${encodeURIComponent(route.ticketId)}`
 }
 
 export function createRouter(): Router {

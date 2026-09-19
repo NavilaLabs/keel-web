@@ -1,4 +1,4 @@
-import type { AssistantDelta, ClientCommand, ServerEvent, TicketId } from '@keel-web/protocol'
+import type { AssistantDelta, ClientCommand, ServerEvent, SessionKey } from '@keel-web/protocol'
 import type {
   CloseStream,
   Connection,
@@ -41,9 +41,13 @@ function statusToResult(status: number): SendResult {
   return 'no_session'
 }
 
+function pathFor(baseUrl: string, key: SessionKey): string {
+  return `${baseUrl}/workspaces/${encodeURIComponent(key.workspaceId)}/tickets/${encodeURIComponent(key.ticketId)}`
+}
+
 export const createConnection: CreateConnection = (baseUrl: string): Connection => ({
-  open(ticketId: TicketId, afterSeq: number, handlers: StreamHandlers): CloseStream {
-    const source = new EventSource(`${baseUrl}/tickets/${encodeURIComponent(ticketId)}/events`)
+  open(key: SessionKey, afterSeq: number, handlers: StreamHandlers): CloseStream {
+    const source = new EventSource(`${pathFor(baseUrl, key)}/events`)
     let closed = false
 
     const close: CloseStream = () => {
@@ -80,9 +84,9 @@ export const createConnection: CreateConnection = (baseUrl: string): Connection 
     return close
   },
 
-  async send(ticketId: TicketId, command: ClientCommand): Promise<SendResult> {
+  async send(key: SessionKey, command: ClientCommand): Promise<SendResult> {
     try {
-      const response = await fetch(`${baseUrl}/tickets/${encodeURIComponent(ticketId)}/input`, {
+      const response = await fetch(`${pathFor(baseUrl, key)}/input`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(command),
