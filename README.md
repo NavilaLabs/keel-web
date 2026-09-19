@@ -13,3 +13,24 @@ npm run dev
 ```
 
 The client (Vite + React) runs on http://localhost:5173 and proxies `/api` to the server (Hono on Node) on port 3000.
+
+## Tooling
+
+All tooling runs in the `dev` service of `compose.yaml`, so the host needs only Docker and git. Start the service once and enable the git hook on the host:
+
+```sh
+export KEEL_TICKET_REPO=$HOME/projects/keel-web-tickets
+docker compose up -d dev
+docker compose exec -u root dev sh scripts/setup-container.sh
+git config core.hooksPath .githooks
+```
+
+Run commands with `docker compose exec dev`:
+
+```sh
+docker compose exec dev npm run lint
+docker compose exec dev npm run format
+docker compose exec dev npm test
+```
+
+The pre-commit hook runs `prek`, which checks lint and formatting in the container. Committing while the container is stopped fails with a message. CI runs the same checks natively on GitHub Actions.

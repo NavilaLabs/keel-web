@@ -1,0 +1,8 @@
+#!/bin/sh
+
+if ! docker compose exec -T dev true 2>/dev/null; then
+  echo "The dev container is not running. Start it with: docker compose up -d dev" >&2
+  exit 1
+fi
+
+exec docker compose exec -T dev prek run

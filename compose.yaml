@@ -1,0 +1,24 @@
+services:
+  dev:
+    build: .devcontainer
+    command: sleep infinity
+    user: node
+    working_dir: /workspaces/keel-web
+    environment:
+      CLAUDE_CONFIG_DIR: /home/node/.claude
+    ports:
+      - '5173:5173'
+      - '3000:3000'
+    volumes:
+      - .:/workspaces/keel-web
+      - root_node_modules:/workspaces/keel-web/node_modules
+      - client_node_modules:/workspaces/keel-web/client/node_modules
+      - server_node_modules:/workspaces/keel-web/server/node_modules
+      - claude_config:/home/node/.claude
+      - ${KEEL_TICKET_REPO:?Set KEEL_TICKET_REPO to the path of the keel-web-tickets clone on the host}:/home/node/projects/keel-web-tickets
+
+volumes:
+  root_node_modules:
+  client_node_modules:
+  server_node_modules:
+  claude_config:
