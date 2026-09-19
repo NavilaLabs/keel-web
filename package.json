@@ -2,6 +2,7 @@
   "name": "keel-web",
   "private": true,
   "workspaces": [
+    "protocol",
     "client",
     "server"
   ],
