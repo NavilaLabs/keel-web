@@ -1,102 +1,78 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useEffect, useMemo, useState } from 'react'
+import { Button } from '@/components/ui/button.tsx'
+import { ChatColumn } from './chat/chat-column.tsx'
+import { createConnection } from './connection/create-connection.ts'
+import { useRoute } from './routing/use-route.ts'
+import { createTranscriptStore } from './transcript/create-transcript-store.ts'
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const { route, navigate } = useRoute()
+  const store = useMemo(() => createTranscriptStore({ connection: createConnection('/api') }), [])
+  const [opened, setOpened] = useState<string[]>(() =>
+    route.ticketId === undefined ? [] : [route.ticketId],
+  )
+  const [entry, setEntry] = useState('')
+
+  // The store owns the stream, so this only tells it which ticket to be on.
+  useEffect(() => {
+    if (route.ticketId === undefined) return
+    store.connect(route.ticketId)
+  }, [route.ticketId, store])
+
+  const open = (ticketId: string) => {
+    setOpened((previous) => (previous.includes(ticketId) ? previous : [...previous, ticketId]))
+    navigate({ ticketId, view: 'none' })
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button type="button" className="counter" onClick={() => setCount((count) => count + 1)}>
-          Count is {count}
-        </button>
-      </section>
+    <div className="flex h-full">
+      <nav className="flex w-56 shrink-0 flex-col gap-1 border-r border-border p-3">
+        <h1 className="mb-2 text-sm text-foreground">keel</h1>
 
-      <div className="ticks"></div>
+        <form
+          className="mb-2 flex gap-1"
+          onSubmit={(submitted) => {
+            submitted.preventDefault()
+            const ticketId = entry.trim()
+            if (ticketId === '') return
+            setEntry('')
+            open(ticketId)
+          }}
+        >
+          <input
+            value={entry}
+            placeholder="Ticket"
+            onChange={(changed) => setEntry(changed.target.value)}
+            className="w-full min-w-0 border border-input bg-background px-2 py-1 text-sm"
+          />
+          <Button type="submit" size="sm" variant="outline">
+            Open
+          </Button>
+        </form>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg className="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg className="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg className="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg className="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+        {opened.map((ticketId) => (
+          <button
+            key={ticketId}
+            type="button"
+            onClick={() => open(ticketId)}
+            className={`px-2 py-1 text-left text-sm ${
+              ticketId === route.ticketId
+                ? 'border-l-2 border-brand bg-accent text-foreground'
+                : 'text-muted-foreground hover:bg-accent'
+            }`}
+          >
+            Ticket {ticketId}
+          </button>
+        ))}
+      </nav>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <main className="min-w-0 flex-1 p-6">
+        <p className="text-sm text-muted-foreground">
+          Tickets, pull requests and diagrams appear here in a later ticket.
+        </p>
+      </main>
+
+      <ChatColumn store={store} ticketId={route.ticketId} />
+    </div>
   )
 }
-
-export default App
