@@ -2,19 +2,19 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { PermissionDecision, SessionKey, StreamMessage } from '@keel-web/protocol'
+import type {
+  PermissionDecision,
+  PermissionRequest,
+  SessionKey,
+  StreamMessage,
+} from '@keel-web/protocol'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Logger } from '../logging/types.js'
 import { createTranscriptLog } from '../transcript/create-transcript-log.js'
 import type { TranscriptLog } from '../transcript/types.js'
 import type { WorkspaceRegistry } from '../workspaces/types.js'
 import { createSessionRegistry, type RunQuery } from './create-session-registry.js'
-import {
-  AuthRequiredError,
-  SessionStartError,
-  UnknownWorkspaceError,
-  type SessionRegistry,
-} from './types.js'
+import { UnknownWorkspaceError, type SessionRegistry } from './types.js'
 
 const four: SessionKey = { workspaceId: 'w1', ticketId: '4' }
 
@@ -37,7 +37,7 @@ const initMessage = { type: 'system', subtype: 'init', session_id: 's1' } as unk
  * real agent subprocess does, so a resumed session does not read the previous
  * run's messages.
  */
-function agentStub() {
+function agentStub({ announceOnFirstMessage = false } = {}) {
   interface Run {
     queued: SDKMessage[]
     wake?: () => void
@@ -48,6 +48,7 @@ function agentStub() {
 
   const runs: Run[] = []
   const seen: Options[] = []
+  const received: unknown[] = []
   // Messages emitted before the registry got as far as starting the agent.
   const waiting: SDKMessage[] = []
 
@@ -56,6 +57,19 @@ function agentStub() {
     const state: Run = { queued: [...waiting], finished: false, aborted: false }
     waiting.length = 0
     runs.push(state)
+
+    // The real agent produces nothing until a message reaches it, so the stub
+    // reads the prompt stream too. With `announceOnFirstMessage` it announces
+    // itself only then, which is what the Agent SDK actually does.
+    void (async () => {
+      for await (const message of parameters.prompt) {
+        received.push(message)
+        if (announceOnFirstMessage && received.length === 1) {
+          state.queued.push(initMessage)
+          state.wake?.()
+        }
+      }
+    })()
 
     parameters.options.abortController?.signal.addEventListener('abort', () => {
       state.aborted = true
@@ -97,6 +111,7 @@ function agentStub() {
     },
     options: () => seen.at(-1),
     runs: () => runs.length,
+    received: () => received.length,
   }
 }
 
@@ -113,9 +128,32 @@ describe('session registry', () => {
       configDirectory,
       transcript,
       logger: silentLogger,
-      startTimeoutMs: 500,
       runQuery: agent.run,
     })
+  }
+
+  /**
+   * A registry whose session has announced itself, which is the state most
+   * tests start from. `attach` no longer waits for that, so the test does.
+   */
+  async function live(): Promise<SessionRegistry> {
+    const registry = registryWith()
+    await registry.attach(four)
+    agent.emit(initMessage)
+    await vi.waitFor(async () => expect(await transcript.since(four, 0)).toHaveLength(1))
+    return registry
+  }
+
+  /** The held request, as the browser learns of it: from the recorded event. */
+  async function held(): Promise<PermissionRequest> {
+    let request: PermissionRequest | undefined
+    await vi.waitFor(async () => {
+      const recorded = await transcript.since(four, 1)
+      const event = recorded.find((candidate) => candidate.type === 'permission.requested')
+      expect(event).toBeDefined()
+      request = (event as { request: PermissionRequest }).request
+    })
+    return request as PermissionRequest
   }
 
   beforeEach(async () => {
@@ -133,59 +171,67 @@ describe('session registry', () => {
     agent = agentStub()
   })
 
-  it('reads an agent that gives up before it is ready as a missing login', async () => {
+  it('attaches an agent that has said nothing yet, so the first message can reach it', async () => {
+    agent = agentStub({ announceOnFirstMessage: true })
     const registry = registryWith()
-    const attaching = registry.attach(four)
-    await vi.waitFor(() => expect(agent.runs()).toBe(1))
-    agent.fail(new Error('Claude Code process exited with code 1'))
 
-    await expect(attaching).rejects.toBeInstanceOf(AuthRequiredError)
+    // Neither of these may hang: the agent announces itself when a turn
+    // begins, and a turn begins with this very message.
+    await registry.attach(four)
+    await registry.send(four, 'what is the status')
+
+    await vi.waitFor(() => expect(agent.received()).toBe(1))
+    await vi.waitFor(async () =>
+      expect(await transcript.since(four, 0)).toContainEqual(
+        expect.objectContaining({ type: 'session.started' }),
+      ),
+    )
   })
 
-  it("keeps the agent's own words in that failure", async () => {
+  it('does not wait for the agent, however long it stays silent', async () => {
     const registry = registryWith()
-    const attaching = registry.attach(four)
+
+    await expect(registry.attach(four)).resolves.toBeUndefined()
+    expect(agent.runs()).toBe(1)
+  })
+
+  it('reads an agent that gives up before it produced anything as a missing login', async () => {
+    const registry = registryWith()
+    await registry.attach(four)
     await vi.waitFor(() => expect(agent.runs()).toBe(1))
+
     agent.fail(new Error('Claude Code process exited with code 1'))
 
-    await expect(attaching).rejects.toThrow(/exited with code 1/)
+    await vi.waitFor(async () => expect(await transcript.since(four, 0)).toHaveLength(1))
     expect((await transcript.since(four, 0))[0]).toMatchObject({
       type: 'session.failed',
       code: 'auth_required',
     })
   })
 
-  it('returns the session once the agent reports its id', async () => {
+  it("keeps the agent's own words in that failure", async () => {
     const registry = registryWith()
+    await registry.attach(four)
+    await vi.waitFor(() => expect(agent.runs()).toBe(1))
 
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
+    agent.fail(new Error('Claude Code process exited with code 1'))
 
-    await expect(attaching).resolves.toMatchObject({ key: four, sessionId: 's1' })
-  })
-
-  it('gives up when the agent never reports a session', async () => {
-    const registry = registryWith()
-
-    await expect(registry.attach(four)).rejects.toBeInstanceOf(SessionStartError)
+    await vi.waitFor(async () => expect(await transcript.since(four, 0)).toHaveLength(1))
+    expect((await transcript.since(four, 0))[0]).toMatchObject({
+      message: expect.stringContaining('exited with code 1') as string,
+    })
   })
 
   it('starts one agent for concurrent attaches', async () => {
     const registry = registryWith()
 
-    const both = Promise.all([registry.attach(four), registry.attach(four)])
-    agent.emit(initMessage)
-    const [first, second] = await both
+    await Promise.all([registry.attach(four), registry.attach(four)])
 
     expect(agent.runs()).toBe(1)
-    expect(first.sessionId).toBe(second.sessionId)
   })
 
   it('reuses the running session instead of starting a second one', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    const registry = await live()
 
     await registry.attach(four)
 
@@ -193,10 +239,7 @@ describe('session registry', () => {
   })
 
   it('resumes a ticket from the session id it remembered', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    const registry = await live()
     await registry.close(four)
 
     const second = registry.attach(four)
@@ -207,19 +250,13 @@ describe('session registry', () => {
   })
 
   it('runs the agent in the code repository', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    await live()
 
     expect(agent.options()?.cwd).toBe('/workspaces/keel-web')
   })
 
   it('records assistant output and hands it to a subscriber', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    const registry = await live()
 
     const seen: StreamMessage[] = []
     registry.subscribe(four, (message) => seen.push(message))
@@ -234,10 +271,7 @@ describe('session registry', () => {
   })
 
   it('streams deltas without recording them', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    const registry = await live()
 
     const seen: StreamMessage[] = []
     registry.subscribe(four, (message) => seen.push(message))
@@ -252,10 +286,7 @@ describe('session registry', () => {
   })
 
   it('stops delivering after unsubscribing', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    const registry = await live()
 
     const seen: StreamMessage[] = []
     const unsubscribe = registry.subscribe(four, (message) => seen.push(message))
@@ -271,10 +302,7 @@ describe('session registry', () => {
   })
 
   it('records a message before it reaches the agent', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    const registry = await live()
 
     await registry.send(four, 'hello')
 
@@ -288,10 +316,7 @@ describe('session registry', () => {
   })
 
   it('reports an unknown permission answer as not held', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    const registry = await live()
 
     await expect(registry.answerPermission(four, 'missing', { decision: 'allow' })).resolves.toBe(
       false,
@@ -299,18 +324,14 @@ describe('session registry', () => {
   })
 
   it('asks the browser before a tool runs, and records both sides', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    const session = await attaching
+    const registry = await live()
 
     const canUseTool = agent.options()?.canUseTool
     const asking = canUseTool?.('Bash', { command: 'ls' }, {
       signal: new AbortController().signal,
     } as never)
 
-    await vi.waitFor(() => expect(session.pendingPermissions()).toHaveLength(1))
-    const [request] = session.pendingPermissions()
+    const request = await held()
     expect(await registry.answerPermission(four, request.requestId, { decision: 'allow' })).toBe(
       true,
     )
@@ -324,26 +345,19 @@ describe('session registry', () => {
   })
 
   it('passes a denial and its reason back to the agent', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    const session = await attaching
+    const registry = await live()
 
     const asking = agent.options()?.canUseTool?.('Bash', { command: 'rm -rf /' }, {
       signal: new AbortController().signal,
     } as never)
-    await vi.waitFor(() => expect(session.pendingPermissions()).toHaveLength(1))
     const decision: PermissionDecision = { decision: 'deny', message: 'not that' }
-    await registry.answerPermission(four, session.pendingPermissions()[0].requestId, decision)
+    await registry.answerPermission(four, (await held()).requestId, decision)
 
     await expect(asking).resolves.toEqual({ behavior: 'deny', message: 'not that' })
   })
 
   it('carries structured answers into the tool input', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    const session = await attaching
+    const registry = await live()
 
     const questions = [
       {
@@ -359,8 +373,7 @@ describe('session registry', () => {
     const asking = agent.options()?.canUseTool?.('AskUserQuestion', { questions }, {
       signal: new AbortController().signal,
     } as never)
-    await vi.waitFor(() => expect(session.pendingPermissions()).toHaveLength(1))
-    const [request] = session.pendingPermissions()
+    const request = await held()
     expect(request.questions).toEqual(questions)
     await registry.answerPermission(four, request.requestId, {
       decision: 'answers',
@@ -374,10 +387,7 @@ describe('session registry', () => {
   })
 
   it('asks for every tool call, whatever the rules say', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    await live()
 
     const hook = agent.options()?.hooks?.PreToolUse?.[0]?.hooks?.[0]
     const decision = await hook?.({} as never, undefined, { signal: new AbortController().signal })
@@ -388,10 +398,7 @@ describe('session registry', () => {
   })
 
   it('records a failing agent as an error the UI can show', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    await live()
 
     agent.fail(new Error('the agent exploded'))
     await vi.waitFor(async () => expect(await transcript.since(four, 1)).toHaveLength(1))
@@ -402,11 +409,8 @@ describe('session registry', () => {
     })
   })
 
-  it('reads a failure after readiness as an agent error, whatever it says', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+  it('reads a failure after the agent produced something as an agent error, whatever it says', async () => {
+    await live()
 
     agent.fail(new Error('Invalid API key - Please run /login'))
     await vi.waitFor(async () => expect(await transcript.since(four, 1)).toHaveLength(1))
@@ -415,25 +419,19 @@ describe('session registry', () => {
   })
 
   it('hands the agent the configuration directory it was given', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    await attaching
+    await live()
 
     expect(agent.options()?.env).toMatchObject({ CLAUDE_CONFIG_DIR: configDirectory })
     expect(agent.options()?.env?.PATH).toBe(process.env.PATH)
   })
 
   it('denies what is still held when the session closes', async () => {
-    const registry = registryWith()
-    const attaching = registry.attach(four)
-    agent.emit(initMessage)
-    const session = await attaching
+    const registry = await live()
 
     const asking = agent.options()?.canUseTool?.('Bash', { command: 'ls' }, {
       signal: new AbortController().signal,
     } as never)
-    await vi.waitFor(() => expect(session.pendingPermissions()).toHaveLength(1))
+    await held()
     await registry.close(four)
 
     await expect(asking).resolves.toMatchObject({ behavior: 'deny' })

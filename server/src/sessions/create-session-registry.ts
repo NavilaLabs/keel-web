@@ -13,11 +13,8 @@ import type { PermissionGate } from '../permissions/types.js'
 import type { TranscriptLog } from '../transcript/types.js'
 import { deltaTextOf, normalise } from './normalise.js'
 import {
-  AuthRequiredError,
-  SessionStartError,
   UnknownWorkspaceError,
   type RunQuery,
-  type Session,
   type SessionRegistry,
   type SessionRegistryOptions,
   type Unsubscribe,
@@ -103,7 +100,6 @@ function identity(key: SessionKey): string {
 
 export function createSessionRegistry(options: SessionRegistryOptions): SessionRegistry {
   const { workspaces, configDirectory, transcript, logger } = options
-  const startTimeoutMs = options.startTimeoutMs ?? 60_000
   const runQuery = options.runQuery ?? query
 
   const sessions = new Map<string, SessionState>()
@@ -225,13 +221,11 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
       options: optionsFor(state, repository, resume),
     })
 
-    let announce: ((sessionId: string) => void) | undefined
-    let fail: ((error: Error) => void) | undefined
-    let reportedReady = false
-    const ready = new Promise<string>((resolve, reject) => {
-      announce = resolve
-      fail = reject
-    })
+    // Registered before the run produces anything, because the agent only
+    // announces itself once a turn begins and a turn begins with a message
+    // through `send`, which needs this entry to exist.
+    sessions.set(identity(key), state)
+    let produced = false
 
     void (async () => {
       try {
@@ -244,26 +238,32 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
           for (const body of normalise(message)) {
             if (body.type === 'session.started') {
               state.sessionId = body.sessionId
-              reportedReady = true
+              produced = true
               await record(state, { ...body, resumed: resume !== undefined })
-              announce?.(body.sessionId)
+              state.logger.info(
+                { sessionId: body.sessionId, resumed: resume !== undefined },
+                'session ready',
+              )
               continue
             }
+            produced = true
             await record(state, body)
           }
         }
       } catch (error) {
         const output = error instanceof Error ? error.message : String(error)
         state.logger.error({ err: output }, 'agent session ended with an error')
-        // An agent that never reported itself ready never authenticated, so
-        // far as this process can tell. One that did and then failed is a
-        // running session that died, which is not a start failure at all.
-        if (reportedReady) {
+        // An agent that never produced anything never authenticated, so far
+        // as this process can tell. One that did and then failed is a running
+        // session that died, which is a different thing entirely.
+        if (produced) {
           await record(state, { type: 'session.failed', code: 'agent_error', message: output })
         } else {
-          const message = notReadyMessage(output)
-          await record(state, { type: 'session.failed', code: 'auth_required', message })
-          fail?.(new AuthRequiredError(message))
+          await record(state, {
+            type: 'session.failed',
+            code: 'auth_required',
+            message: notReadyMessage(output),
+          })
         }
       } finally {
         state.gate.close()
@@ -271,29 +271,8 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
       }
     })()
 
-    const timeout = new Promise<never>((_, reject) => {
-      const timer = setTimeout(
-        () => reject(new SessionStartError('The agent did not report a session in time.')),
-        startTimeoutMs,
-      )
-      timer.unref()
-    })
-
-    await Promise.race([ready, timeout])
-    sessions.set(identity(key), state)
-    state.logger.info(
-      { sessionId: state.sessionId, resumed: resume !== undefined },
-      'session ready',
-    )
+    state.logger.info({ resumed: resume !== undefined }, 'session started')
     return state
-  }
-
-  function toSession(state: SessionState): Session {
-    return {
-      key: state.key,
-      sessionId: state.sessionId,
-      pendingPermissions: () => state.gate.pending(),
-    }
   }
 
   function sessionFor(key: SessionKey): SessionState {
@@ -305,15 +284,17 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
   return {
     async attach(key) {
       const id = identity(key)
-      const running = sessions.get(id)
-      if (running !== undefined) return toSession(running)
+      if (sessions.has(id)) return
 
       const inFlight = starting.get(id)
-      if (inFlight !== undefined) return toSession(await inFlight)
+      if (inFlight !== undefined) {
+        await inFlight
+        return
+      }
 
       const attempt = start(key).finally(() => starting.delete(id))
       starting.set(id, attempt)
-      return toSession(await attempt)
+      await attempt
     },
 
     async send(key, text) {

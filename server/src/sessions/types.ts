@@ -1,25 +1,8 @@
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type {
-  PermissionDecision,
-  PermissionRequest,
-  RequestId,
-  SessionKey,
-  StreamMessage,
-} from '@keel-web/protocol'
+import type { PermissionDecision, RequestId, SessionKey, StreamMessage } from '@keel-web/protocol'
 import type { Logger } from '../logging/types.js'
 import type { TranscriptLog } from '../transcript/types.js'
 import type { WorkspaceRegistry } from '../workspaces/types.js'
-
-/** A running Claude Code session. One per workspace and ticket, never two. */
-export interface Session {
-  readonly key: SessionKey
-
-  /** The Agent SDK session id, used to resume this ticket after a restart. */
-  readonly sessionId: string
-
-  /** Tool calls waiting for an answer, oldest first. */
-  pendingPermissions(): readonly PermissionRequest[]
-}
 
 export type Unsubscribe = () => void
 
@@ -37,21 +20,27 @@ export type Unsubscribe = () => void
  */
 export interface SessionRegistry {
   /**
-   * Returns the session, starting or resuming it if needed.
+   * Makes sure a session exists for that key, starting or resuming it if
+   * needed.
    *
    * The agent runs in the workspace's repository. Idempotent: concurrent calls
-   * for one key yield the same session and start only one agent.
+   * for one key start only one agent, and a call for a session that is already
+   * running does nothing.
    *
-   * Rejects with `UnknownWorkspaceError` for a workspace that is not
-   * registered. Rejects with `AuthRequiredError` when the agent exits before
-   * it reports itself ready: a login is not probed for, because it can come
-   * from a credentials file, the environment, a helper or a cloud provider
-   * and only the agent resolves which one applies. Any other failure that
-   * early is reported the same way, so the error carries the agent's own
-   * output with it. Rejects with `SessionStartError` when the agent starts
-   * but does not report its session id in time.
+   * Returns once the session will accept messages, which is all the caller
+   * needs and all this can honestly promise. It deliberately does not wait for
+   * the agent to announce itself: the Agent SDK sends its `init` message when
+   * the first turn begins, and the first turn begins when a message arrives
+   * through `send`, so waiting here would wait for something only the caller
+   * can cause.
+   *
+   * Rejects only with `UnknownWorkspaceError`, for a workspace that is not
+   * registered or cannot hold a session. Everything else the agent does wrong,
+   * including a missing login, surfaces as a `session.failed` event on the
+   * stream, because it cannot be known before the agent has had something to
+   * do.
    */
-  attach(key: SessionKey): Promise<Session>
+  attach(key: SessionKey): Promise<void>
 
   /**
    * Queues a message for the session's current or next turn.
@@ -102,22 +91,6 @@ export class UnknownWorkspaceError extends Error {
 }
 
 /**
- * The agent gave up before it was ready, and a missing or expired login is
- * the likeliest reason.
- *
- * The message carries the agent's own output, because this is also where an
- * agent that failed to start for an unrelated reason lands.
- */
-export class AuthRequiredError extends Error {
-  override readonly name = 'AuthRequiredError'
-}
-
-/** The agent subprocess did not become ready. */
-export class SessionStartError extends Error {
-  override readonly name = 'SessionStartError'
-}
-
-/**
  * Starts an agent run.
  *
  * Narrower than the SDK's own `query`, which returns a generator with control
@@ -146,9 +119,6 @@ export interface SessionRegistryOptions {
 
   transcript: TranscriptLog
   logger: Logger
-
-  /** Milliseconds to wait for the agent to report its session id. */
-  startTimeoutMs?: number
 
   /** The agent runner. Injected so the registry can be driven without a real agent. */
   runQuery?: RunQuery
