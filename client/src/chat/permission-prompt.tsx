@@ -95,7 +95,11 @@ function Questions({
 }
 
 export function PermissionPrompt({ request, answering, onAnswer }: PermissionPromptProperties) {
-  const [reason, setReason] = useState<string | undefined>(undefined)
+  // A call the agent flagged opens on its refusal, so that approving it is
+  // never the thing that happens by reflex.
+  const [reason, setReason] = useState<string | undefined>(
+    request.defaultToNo === true ? '' : undefined,
+  )
 
   if (request.questions !== undefined) {
     return (
@@ -116,10 +120,21 @@ export function PermissionPrompt({ request, answering, onAnswer }: PermissionPro
         <ToolInput name={request.toolName} input={request.input} />
 
         {reason === undefined ? (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={answering} onClick={() => onAnswer({ decision: 'allow' })}>
               Allow
             </Button>
+            {request.alwaysAllowable === true && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={answering}
+                title={`Stop asking about ${request.toolName} for the rest of this session`}
+                onClick={() => onAnswer({ decision: 'allow', alwaysAllow: true })}
+              >
+                Allow, and stop asking
+              </Button>
+            )}
             <Button size="sm" variant="outline" disabled={answering} onClick={() => setReason('')}>
               Deny
             </Button>

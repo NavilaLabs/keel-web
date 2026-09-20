@@ -1,4 +1,10 @@
-import type { AssistantDelta, ClientCommand, ServerEvent, SessionKey } from '@keel-web/protocol'
+import type {
+  AssistantDelta,
+  ClientCommand,
+  ServerEvent,
+  SessionControlsMessage,
+  SessionKey,
+} from '@keel-web/protocol'
 import type {
   CloseStream,
   Connection,
@@ -79,6 +85,12 @@ export const createConnection: CreateConnection = (baseUrl: string): Connection 
 
     source.addEventListener('assistant.delta', (message) => {
       handlers.onDelta(JSON.parse((message as MessageEvent<string>).data) as AssistantDelta)
+    })
+
+    source.addEventListener('session.controls', (message) => {
+      handlers.onControls(
+        JSON.parse((message as MessageEvent<string>).data) as SessionControlsMessage,
+      )
     })
 
     return close

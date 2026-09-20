@@ -1,15 +1,19 @@
 import type { PermissionDecision, TicketId } from '@keel-web/protocol'
 import { useEffect, useRef, useState } from 'react'
+import { nextMode } from '../session-controls/modes.ts'
+import { StatusLine } from '../session-controls/status-line.tsx'
+import type { SessionControlsStore } from '../session-controls/types.ts'
 import type { TranscriptStore } from '../transcript/types.ts'
 import { useDraft, useTranscript } from '../transcript/use-transcript.ts'
 import { Transcript } from './transcript.tsx'
 
 interface ChatColumnProperties {
   store: TranscriptStore
+  controls: SessionControlsStore
   ticketId: TicketId | undefined
 }
 
-export function ChatColumn({ store, ticketId }: ChatColumnProperties) {
+export function ChatColumn({ store, controls, ticketId }: ChatColumnProperties) {
   const items = useTranscript(store)
   const draft = useDraft(store)
   const [text, setText] = useState('')
@@ -32,6 +36,12 @@ export function ChatColumn({ store, ticketId }: ChatColumnProperties) {
     if (message === '') return
     setText('')
     void store.send(message)
+  }
+
+  const cycleMode = () => {
+    const current = controls.getControls()
+    if (current === undefined) return
+    void controls.change({ mode: nextMode(current.settings.mode) })
   }
 
   const running = items.some((item) => item.kind === 'tool' && item.result === undefined)
@@ -80,12 +90,14 @@ export function ChatColumn({ store, ticketId }: ChatColumnProperties) {
               pressed.preventDefault()
               submit()
             }
+            if (pressed.key === 'Tab' && pressed.shiftKey) {
+              pressed.preventDefault()
+              cycleMode()
+            }
           }}
           className="w-full resize-none rounded-sm border border-input bg-background px-3 py-2 text-[15px] leading-relaxed placeholder:text-muted-foreground focus-visible:border-keel focus-visible:outline-none"
         />
-        <p className="pt-1.5 text-[12px] text-muted-foreground">
-          Enter sends, shift and enter starts a line.
-        </p>
+        <StatusLine store={controls} />
       </form>
     </aside>
   )

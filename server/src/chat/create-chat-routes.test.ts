@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
 import type { PermissionDecision, ServerEvent, SessionKey } from '@keel-web/protocol'
 import type { LoggerVariables } from '../logging/types.js'
-import type { SessionRegistry } from '../sessions/types.js'
+import { UnusableSettingsError, type SessionRegistry } from '../sessions/types.js'
 import type { TranscriptLog } from '../transcript/types.js'
 import type { Workspace, WorkspaceRegistry } from '../workspaces/types.js'
 import { createChatRoutes } from './create-chat-routes.js'
@@ -25,6 +25,12 @@ function registryStub(overrides: Partial<SessionRegistry> = {}): SessionRegistry
       pendingPermissions: () => [],
     })),
     send: vi.fn(async () => undefined),
+    controls: vi.fn(async () => ({
+      settings: { mode: 'default' as const },
+      models: [],
+      commands: [],
+    })),
+    changeControls: vi.fn(async () => undefined),
     answerPermission: vi.fn(async () => true),
     interrupt: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined),
@@ -160,6 +166,44 @@ describe('chat input endpoint', () => {
     expect(response.status).toBe(404)
   })
 
+  it('takes a change to what the session runs with', async () => {
+    const sessions = registryStub()
+
+    const response = await postInput(sessions, {
+      command: 'settings',
+      change: { mode: 'acceptEdits', model: 'opus', effort: null },
+    })
+
+    expect(response.status).toBe(204)
+    expect(sessions.changeControls).toHaveBeenCalledWith(four, {
+      mode: 'acceptEdits',
+      model: 'opus',
+      effort: null,
+    })
+  })
+
+  it('reads a mode keel-web does not offer as malformed, so naming it reaches nothing', async () => {
+    const sessions = registryStub()
+
+    for (const mode of ['bypassPermissions', 'auto', 'whatever']) {
+      const response = await postInput(sessions, { command: 'settings', change: { mode } })
+      expect(response.status).toBe(400)
+    }
+    expect(sessions.changeControls).not.toHaveBeenCalled()
+  })
+
+  it('answers 409 when the session cannot run with what was asked for', async () => {
+    const sessions = registryStub({
+      changeControls: vi.fn(async () => {
+        throw new UnusableSettingsError('This session cannot run on gpt.')
+      }),
+    })
+
+    const response = await postInput(sessions, { command: 'settings', change: { model: 'gpt' } })
+
+    expect(response.status).toBe(409)
+  })
+
   it('never starts a session from the input endpoint', async () => {
     const sessions = registryStub()
 
@@ -181,6 +225,25 @@ describe('chat event stream', () => {
 
     expect(body).toContain('id: 2')
     expect(body).not.toContain('"seq":1')
+  })
+
+  it('tells a viewer what the session runs with, which no replay would', async () => {
+    const sessions = registryStub({
+      controls: vi.fn(async () => ({
+        settings: { mode: 'acceptEdits' as const },
+        models: [],
+        commands: [{ name: 'review', description: 'Reviews the diff', argumentHint: '' }],
+      })),
+    })
+    const app = appWith(sessions)
+
+    const body = await readStream(app, '/workspaces/w1/tickets/4/events')
+
+    expect(body).toContain('event: session.controls')
+    expect(body).toContain('"mode":"acceptEdits"')
+    // Not part of the record, so it carries no sequence number and a replay
+    // would never bring it back.
+    expect(body).not.toContain('id: ')
   })
 
   it('reports a failed attach as an event instead of a broken stream', async () => {

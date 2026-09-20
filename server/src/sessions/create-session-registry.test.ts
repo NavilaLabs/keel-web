@@ -1,10 +1,18 @@
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import type {
+  EffortLevel,
+  ModelInfo,
+  Options,
+  PermissionMode,
+  SDKMessage,
+  SlashCommand,
+} from '@anthropic-ai/claude-agent-sdk'
 import type {
   PermissionDecision,
   PermissionRequest,
+  SessionControls,
   SessionKey,
   StreamMessage,
 } from '@keel-web/protocol'
@@ -14,7 +22,7 @@ import { createTranscriptLog } from '../transcript/create-transcript-log.js'
 import type { TranscriptLog } from '../transcript/types.js'
 import type { WorkspaceRegistry } from '../workspaces/types.js'
 import { createSessionRegistry, type RunQuery } from './create-session-registry.js'
-import { UnknownWorkspaceError, type SessionRegistry } from './types.js'
+import { UnknownWorkspaceError, UnusableSettingsError, type SessionRegistry } from './types.js'
 
 const four: SessionKey = { workspaceId: 'w1', ticketId: '4' }
 
@@ -29,6 +37,14 @@ const silentLogger = {
 } as unknown as Logger
 
 const initMessage = { type: 'system', subtype: 'init', session_id: 's1' } as unknown as SDKMessage
+
+/** One suggestion, as the agent offers it behind an "always allow" choice. */
+const rule = {
+  type: 'addRules' as const,
+  rules: [{ toolName: 'Bash', ruleContent: 'ls:*' }],
+  behavior: 'allow' as const,
+  destination: 'session' as const,
+}
 
 /**
  * A stand-in agent whose output the test drives message by message.
@@ -49,6 +65,10 @@ function agentStub({ announceOnFirstMessage = false } = {}) {
   const runs: Run[] = []
   const seen: Options[] = []
   const received: unknown[] = []
+  let commands: SlashCommand[] = []
+  let models: ModelInfo[] = []
+  let catalogueFails = false
+  const asked: { model?: string; mode?: string; effort?: EffortLevel | null } = {}
   // Messages emitted before the registry got as far as starting the agent.
   const waiting: SDKMessage[] = []
 
@@ -76,7 +96,7 @@ function agentStub({ announceOnFirstMessage = false } = {}) {
       state.wake?.()
     })
 
-    return (async function* () {
+    const messages = (async function* () {
       while (true) {
         while (state.queued.length > 0) yield state.queued.shift() as SDKMessage
         if (state.failure !== undefined) throw state.failure
@@ -86,6 +106,25 @@ function agentStub({ announceOnFirstMessage = false } = {}) {
         })
       }
     })()
+
+    return Object.assign(messages, {
+      setModel: (model?: string) => {
+        asked.model = model
+        return Promise.resolve()
+      },
+      setPermissionMode: (mode: PermissionMode) => {
+        asked.mode = mode
+        return Promise.resolve()
+      },
+      applyFlagSettings: (settings: { effortLevel?: EffortLevel | null }) => {
+        asked.effort = settings.effortLevel
+        return Promise.resolve()
+      },
+      supportedCommands: () =>
+        catalogueFails ? Promise.reject(new Error('no login')) : Promise.resolve(commands),
+      supportedModels: () =>
+        catalogueFails ? Promise.reject(new Error('no login')) : Promise.resolve(models),
+    }) as unknown as ReturnType<RunQuery>
   }
 
   const current = () =>
@@ -112,6 +151,14 @@ function agentStub({ announceOnFirstMessage = false } = {}) {
     options: () => seen.at(-1),
     runs: () => runs.length,
     received: () => received.length,
+    offer: (offered: { commands?: SlashCommand[]; models?: ModelInfo[] }) => {
+      if (offered.commands !== undefined) commands = offered.commands
+      if (offered.models !== undefined) models = offered.models
+    },
+    asked: () => asked,
+    refuseCatalogue: () => {
+      catalogueFails = true
+    },
   }
 }
 
@@ -142,6 +189,21 @@ describe('session registry', () => {
     agent.emit(initMessage)
     await vi.waitFor(async () => expect(await transcript.since(four, 0)).toHaveLength(1))
     return registry
+  }
+
+  /** What the PreToolUse hook answers for one call. */
+  function preToolUse(input: { tool_name: string; permission_mode?: string }) {
+    const hook = agent.options()?.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    return hook?.(input as never, undefined, { signal: new AbortController().signal })
+  }
+
+  /** Every controls message a viewer would have seen, newest last. */
+  function watchControls(registry: SessionRegistry): SessionControls[] {
+    const seen: SessionControls[] = []
+    registry.subscribe(four, (message) => {
+      if (message.type === 'session.controls') seen.push(message.controls)
+    })
+    return seen
   }
 
   /** The held request, as the browser learns of it: from the recorded event. */
@@ -386,15 +448,22 @@ describe('session registry', () => {
     })
   })
 
-  it('asks for every tool call, whatever the rules say', async () => {
+  it('asks in its default mode whatever the rules say', async () => {
     await live()
 
-    const hook = agent.options()?.hooks?.PreToolUse?.[0]?.hooks?.[0]
-    const decision = await hook?.({} as never, undefined, { signal: new AbortController().signal })
+    const decision = await preToolUse({ tool_name: 'Bash', permission_mode: 'default' })
 
     expect(decision).toMatchObject({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' },
     })
+  })
+
+  it('leaves the call to the agent in any mode but the default one', async () => {
+    await live()
+
+    for (const mode of ['acceptEdits', 'plan', 'dontAsk']) {
+      expect(await preToolUse({ tool_name: 'Edit', permission_mode: mode })).toEqual({})
+    }
   })
 
   it('records a failing agent as an error the UI can show', async () => {
@@ -464,6 +533,185 @@ describe('session registry', () => {
     await expect(registry.attach({ workspaceId: 'gone', ticketId: '4' })).rejects.toBeInstanceOf(
       UnknownWorkspaceError,
     )
+  })
+
+  it('says what the session offers before a turn has run', async () => {
+    agent.offer({
+      commands: [{ name: 'review', description: 'Reviews the diff', argumentHint: '<path>' }],
+      models: [
+        {
+          value: 'sonnet',
+          displayName: 'Sonnet 5',
+          description: 'balanced',
+          supportsEffort: true,
+          supportedEffortLevels: ['low', 'high'],
+        },
+      ],
+    })
+    const registry = registryWith()
+    await registry.attach(four)
+
+    const controls = await registry.controls(four)
+
+    expect(controls.settings).toEqual({ mode: 'default' })
+    expect(controls.commands).toEqual([
+      { name: 'review', description: 'Reviews the diff', argumentHint: '<path>' },
+    ])
+    expect(controls.models[0]?.effortLevels).toEqual(['low', 'high'])
+  })
+
+  it('offers no effort level for a model that has no effort control', async () => {
+    agent.offer({
+      models: [{ value: 'haiku', displayName: 'Haiku', description: 'quick' }],
+    })
+    const registry = registryWith()
+    await registry.attach(four)
+
+    expect((await registry.controls(four)).models[0]?.effortLevels).toEqual([])
+  })
+
+  it('leaves a session usable when the agent will not say what it offers', async () => {
+    const registry = registryWith()
+    agent.refuseCatalogue()
+    await registry.attach(four)
+
+    const controls = await registry.controls(four)
+
+    expect(controls.commands).toEqual([])
+    expect(controls.models).toEqual([])
+  })
+
+  it('changes the model, the mode and the effort, and says so once', async () => {
+    agent.offer({
+      models: [
+        {
+          value: 'opus',
+          displayName: 'Opus 5',
+          description: 'deep',
+          supportsEffort: true,
+          supportedEffortLevels: ['high', 'max'],
+        },
+      ],
+    })
+    const registry = await live()
+    const seen = watchControls(registry)
+
+    await registry.changeControls(four, { mode: 'acceptEdits', model: 'opus', effort: 'max' })
+
+    expect(agent.asked()).toEqual({ mode: 'acceptEdits', model: 'opus', effort: 'max' })
+    expect(seen.at(-1)?.settings).toEqual({ mode: 'acceptEdits', model: 'opus', effort: 'max' })
+  })
+
+  it('returns the model and the effort to the agent default', async () => {
+    agent.offer({
+      models: [
+        {
+          value: 'opus',
+          displayName: 'Opus 5',
+          description: 'deep',
+          supportsEffort: true,
+          supportedEffortLevels: ['high'],
+        },
+      ],
+    })
+    const registry = await live()
+    await registry.changeControls(four, { model: 'opus', effort: 'high' })
+
+    await registry.changeControls(four, { model: null, effort: null })
+
+    expect(agent.asked()).toMatchObject({ model: undefined, effort: null })
+    expect((await registry.controls(four)).settings).toEqual({ mode: 'default' })
+  })
+
+  it('refuses a model the session was never offered', async () => {
+    const registry = await live()
+
+    await expect(registry.changeControls(four, { model: 'gpt' })).rejects.toBeInstanceOf(
+      UnusableSettingsError,
+    )
+  })
+
+  it('refuses an effort the chosen model has no control for', async () => {
+    agent.offer({
+      models: [
+        {
+          value: 'haiku',
+          displayName: 'Haiku',
+          description: 'quick',
+          supportsEffort: true,
+          supportedEffortLevels: ['low'],
+        },
+      ],
+    })
+    const registry = await live()
+
+    await expect(
+      registry.changeControls(four, { model: 'haiku', effort: 'max' }),
+    ).rejects.toBeInstanceOf(UnusableSettingsError)
+    expect(agent.asked().model).toBeUndefined()
+  })
+
+  it('replaces the command list when the agent discovers more', async () => {
+    const registry = await live()
+    const seen = watchControls(registry)
+
+    agent.emit({
+      type: 'system',
+      subtype: 'commands_changed',
+      commands: [{ name: 'deploy', description: 'Ships it', argumentHint: '' }],
+    } as unknown as SDKMessage)
+
+    await vi.waitFor(() => expect(seen.at(-1)?.commands).toHaveLength(1))
+    expect(seen.at(-1)?.commands[0]?.name).toBe('deploy')
+  })
+
+  it('offers to stop asking only where a rule would cover no more than the call', async () => {
+    await live()
+
+    void agent.options()?.canUseTool?.('Bash', { command: 'ls' }, {
+      signal: new AbortController().signal,
+      suggestions: [rule],
+      defaultToNo: true,
+    } as never)
+
+    const request = await held()
+    expect(request.alwaysAllowable).toBe(true)
+    expect(request.defaultToNo).toBe(true)
+  })
+
+  it('does not offer to stop asking when the agent says the rule grants more', async () => {
+    await live()
+
+    void agent.options()?.canUseTool?.('Bash', { command: 'ls' }, {
+      signal: new AbortController().signal,
+      suggestions: [rule],
+      suppressAlwaysAllowRule: true,
+    } as never)
+
+    expect((await held()).alwaysAllowable).toBeUndefined()
+  })
+
+  it('keeps an always-allow rule inside the session and stops asking for that tool', async () => {
+    const registry = await live()
+
+    const asking = agent.options()?.canUseTool?.('Bash', { command: 'ls' }, {
+      signal: new AbortController().signal,
+      suggestions: [{ ...rule, destination: 'localSettings' }],
+    } as never)
+    await registry.answerPermission(four, (await held()).requestId, {
+      decision: 'allow',
+      alwaysAllow: true,
+    })
+
+    await expect(asking).resolves.toEqual({
+      behavior: 'allow',
+      updatedPermissions: [{ ...rule, destination: 'session' }],
+      decisionClassification: 'user_permanent',
+    })
+    expect(await preToolUse({ tool_name: 'Bash', permission_mode: 'default' })).toEqual({})
+    expect(await preToolUse({ tool_name: 'Edit', permission_mode: 'default' })).toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'ask' },
+    })
   })
 
   it('closes an unknown ticket without complaining', async () => {
