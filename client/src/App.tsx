@@ -3,6 +3,7 @@ import type { ArtifactRef } from '@keel-web/protocol'
 import { Centre } from './artifacts/centre.tsx'
 import { useCentre } from './artifacts/use-centre.ts'
 import { ChatColumn } from './chat/chat-column.tsx'
+import { createHintListener } from './hints/create-hint-listener.ts'
 import { createConnection } from './connection/create-connection.ts'
 import { DirectoryPicker } from './directories/directory-picker.tsx'
 import { useRoute } from './routing/use-route.ts'
@@ -22,12 +23,29 @@ export default function App() {
 
   const workspace = workspaces.find((candidate) => candidate.id === route.workspaceId)
   const { centre, snapshot } = useCentre(route.workspaceId, route.ticketId)
+  const hints = useMemo(
+    () =>
+      route.workspaceId === undefined
+        ? undefined
+        : createHintListener({ workspaceId: route.workspaceId }),
+    [route.workspaceId],
+  )
 
   // The URL says which artefact is open, so a deep link and a reload land on
   // the same one. Opening it again is a no-op once it is already open.
   useEffect(() => {
     if (route.view === 'artifact' && route.artifact) centre?.open(route.artifact)
   }, [route.view, route.artifact, centre])
+
+  // What the workflow points at comes to the front once. The developer
+  // overrides it by doing anything else, because nothing here is state.
+  useEffect(() => {
+    hints?.listen(route.ticketId, (hint) => {
+      const primary = hint.targets[0]
+      if (primary) centre?.open(primary)
+    })
+    return () => hints?.dispose()
+  }, [hints, route.ticketId, centre])
 
   // The store owns the stream, so this only tells it which session to be on.
   useEffect(() => {

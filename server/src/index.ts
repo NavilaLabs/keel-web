@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { createArchitectureReader, createArchitectureRoutes } from './architecture/index.js'
 import { createArtifactReader, createArtifactRoutes } from './artifacts/index.js'
 import { createChatRoutes } from './chat/index.js'
+import { createHintFollower, createHintRoutes } from './hints/index.js'
 import { createDirectoryBrowser, createDirectoryRoutes } from './directories/index.js'
 import { logger, requestLogger, type LoggerVariables } from './logging/index.js'
 import { createHostGuard } from './security/index.js'
@@ -23,6 +24,7 @@ const transcript = createTranscriptLog(workspaces)
 const sessions = createSessionRegistry({ workspaces, configDirectory, transcript, logger })
 
 const architecture = createArchitectureReader()
+const hints = createHintFollower()
 const artifacts = createArtifactReader({ architecture })
 
 const additionalHosts = (process.env.KEEL_WEB_ALLOWED_HOSTS ?? '')
@@ -41,6 +43,7 @@ app.route('/api', createDirectoryRoutes({ directories: createDirectoryBrowser() 
 app.route('/api', createChatRoutes({ sessions, transcript, workspaces }))
 app.route('/api', createArtifactRoutes({ artifacts, workspaces }))
 app.route('/api', createArchitectureRoutes({ architecture, workspaces }))
+app.route('/api', createHintRoutes({ hints, workspaces }))
 
 const port = Number(process.env.PORT ?? 3000)
 
