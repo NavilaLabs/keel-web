@@ -109,17 +109,14 @@ const Item = memo(function Item({
       return (
         <Aside edge="border-destructive">
           <p className="max-w-[68ch] text-sm text-foreground">
+            {item.text}
             {item.authRequired ? (
               <>
-                Claude Code has no login in this container. Run{' '}
-                <code className="bg-code px-1 font-mono text-[13px]">
-                  docker compose exec dev claude
-                </code>{' '}
-                once, then reload.
+                {' '}
+                Log in with <code className="bg-code px-1 font-mono text-[13px]">claude</code> in a
+                terminal, then reload.
               </>
-            ) : (
-              item.text
-            )}
+            ) : null}
           </p>
         </Aside>
       )

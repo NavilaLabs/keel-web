@@ -1,21 +1,8 @@
-import type {
-  PermissionDecision,
-  PermissionRequest,
-  RequestId,
-  SessionKey,
-  StreamMessage,
-} from '@keel-web/protocol'
-
-/** A running Claude Code session. One per workspace and ticket, never two. */
-export interface Session {
-  readonly key: SessionKey
-
-  /** The Agent SDK session id, used to resume this ticket after a restart. */
-  readonly sessionId: string
-
-  /** Tool calls waiting for an answer, oldest first. */
-  pendingPermissions(): readonly PermissionRequest[]
-}
+import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { PermissionDecision, RequestId, SessionKey, StreamMessage } from '@keel-web/protocol'
+import type { Logger } from '../logging/types.js'
+import type { TranscriptLog } from '../transcript/types.js'
+import type { WorkspaceRegistry } from '../workspaces/types.js'
 
 export type Unsubscribe = () => void
 
@@ -26,18 +13,34 @@ export type Unsubscribe = () => void
  * tool call passes the permission gate, so nothing runs unapproved. A session
  * is never bound to the request that created it: closing a browser tab leaves
  * it running.
+ *
+ * The agent is a child of this process and therefore runs as whoever started
+ * the server, on the same machine and the same filesystem. That is what lets
+ * it reach the developer's own repositories and their own Claude Code login.
  */
 export interface SessionRegistry {
   /**
-   * Returns the session, starting or resuming it if needed.
+   * Makes sure a session exists for that key, starting or resuming it if
+   * needed.
    *
    * The agent runs in the workspace's repository. Idempotent: concurrent calls
-   * for one key yield the same session and start only one agent. Rejects with
-   * `UnknownWorkspaceError` for a workspace that is not registered, with
-   * `AuthRequiredError` when Claude Code has no login, and with
-   * `SessionStartError` when the agent does not become ready in time.
+   * for one key start only one agent, and a call for a session that is already
+   * running does nothing.
+   *
+   * Returns once the session will accept messages, which is all the caller
+   * needs and all this can honestly promise. It deliberately does not wait for
+   * the agent to announce itself: the Agent SDK sends its `init` message when
+   * the first turn begins, and the first turn begins when a message arrives
+   * through `send`, so waiting here would wait for something only the caller
+   * can cause.
+   *
+   * Rejects only with `UnknownWorkspaceError`, for a workspace that is not
+   * registered or cannot hold a session. Everything else the agent does wrong,
+   * including a missing login, surfaces as a `session.failed` event on the
+   * stream, because it cannot be known before the agent has had something to
+   * do.
    */
-  attach(key: SessionKey): Promise<Session>
+  attach(key: SessionKey): Promise<void>
 
   /**
    * Queues a message for the session's current or next turn.
@@ -87,12 +90,36 @@ export class UnknownWorkspaceError extends Error {
   override readonly name = 'UnknownWorkspaceError'
 }
 
-/** Claude Code has no login; `claude` must be run once where the agent runs. */
-export class AuthRequiredError extends Error {
-  override readonly name = 'AuthRequiredError'
-}
+/**
+ * Starts an agent run.
+ *
+ * Narrower than the SDK's own `query`, which returns a generator with control
+ * methods the registry does not use: it drives the run through its own
+ * `AbortController` instead.
+ */
+export type RunQuery = (parameters: {
+  prompt: AsyncIterable<SDKUserMessage>
+  options: Options
+}) => AsyncIterable<SDKMessage>
 
-/** The agent subprocess did not become ready. */
-export class SessionStartError extends Error {
-  override readonly name = 'SessionStartError'
+export interface SessionRegistryOptions {
+  /** Resolves a workspace to the repository an agent runs in. */
+  workspaces: WorkspaceRegistry
+
+  /**
+   * Claude Code's configuration directory, holding whatever the developer
+   * logged in with.
+   *
+   * Handed to the agent as part of its environment, so both sides resolve the
+   * same directory instead of each reading `CLAUDE_CONFIG_DIR` for itself.
+   * The registry never reads it: what counts as a login is the agent's
+   * answer, not a file this process can inspect.
+   */
+  configDirectory: string
+
+  transcript: TranscriptLog
+  logger: Logger
+
+  /** The agent runner. Injected so the registry can be driven without a real agent. */
+  runQuery?: RunQuery
 }

@@ -15,6 +15,11 @@ import type { LoggerVariables } from '../logging/types.js'
  * client disconnects, and no response compression may be mounted in front of
  * it.
  *
+ * A client that goes away is unsubscribed exactly once, however the departure
+ * is noticed. A browser reload is therefore one attach and one detach, not a
+ * detach that never comes and a subscriber left behind for the life of the
+ * process.
+ *
  * `POST /api/workspaces/:workspaceId/tickets/:ticketId/input` takes one
  * `ClientCommand`. It answers 204 on success, 400 for a malformed command, 404
  * when the session does not exist or the workspace is unknown, and 409 when a

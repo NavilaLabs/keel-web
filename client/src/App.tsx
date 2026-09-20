@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChatColumn } from './chat/chat-column.tsx'
 import { createConnection } from './connection/create-connection.ts'
+import { DirectoryPicker } from './directories/directory-picker.tsx'
 import { useRoute } from './routing/use-route.ts'
 import { createTranscriptStore } from './transcript/create-transcript-store.ts'
 import { useWorkspaces } from './workspaces/use-workspaces.ts'
 
 export default function App() {
   const { route, navigate } = useRoute()
-  const { workspaces, loading } = useWorkspaces()
+  const { workspaces, loading, error, add, remove } = useWorkspaces()
   const store = useMemo(() => createTranscriptStore({ connection: createConnection('/api') }), [])
   const [opened, setOpened] = useState<string[]>(() =>
     route.ticketId === undefined ? [] : [route.ticketId],
   )
   const [entry, setEntry] = useState('')
+  const [picking, setPicking] = useState(false)
 
   const workspace = workspaces.find((candidate) => candidate.id === route.workspaceId)
 
@@ -43,31 +45,58 @@ export default function App() {
           {loading && <span className="px-2 text-[13px] text-muted-foreground">Loading</span>}
           {!loading && workspaces.length === 0 && (
             <p className="px-2 text-[13px] leading-relaxed text-muted-foreground">
-              No repositories configured. Set KEEL_WEB_WORKSPACES and restart.
+              No repositories yet. Add one by its path below.
             </p>
           )}
           {workspaces.map((candidate) => {
             const active = candidate.id === route.workspaceId
+            const ready = candidate.state === 'ready'
             return (
-              <button
-                key={candidate.id}
-                type="button"
-                disabled={!candidate.keel}
-                onClick={() => openWorkspace(candidate.id)}
-                className={`-ml-px border-l-2 py-1.5 pl-3 text-left text-[13px] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none ${
-                  active
-                    ? 'border-keel text-foreground'
-                    : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
-                }`}
-                title={candidate.keel ? undefined : 'No keel configuration in this repository'}
-              >
-                {candidate.name}
-              </button>
+              <div key={candidate.id} className="group flex items-center">
+                <button
+                  type="button"
+                  onClick={() => openWorkspace(candidate.id)}
+                  className={`-ml-px min-w-0 flex-1 border-l-2 py-1.5 pl-3 text-left text-[13px] focus-visible:outline-none ${
+                    active
+                      ? 'border-keel text-foreground'
+                      : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
+                  }`}
+                  title={ready ? candidate.path : candidate.reason}
+                >
+                  <span className="block truncate">{candidate.name}</span>
+                </button>
+                {!ready && (
+                  <span
+                    aria-hidden
+                    title={candidate.reason}
+                    className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60"
+                  />
+                )}
+                <button
+                  type="button"
+                  aria-label={`Remove ${candidate.name}`}
+                  onClick={() => void remove(candidate.id)}
+                  className="shrink-0 px-2 text-[13px] text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none"
+                >
+                  &times;
+                </button>
+              </div>
             )
           })}
+
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            className="mt-3 rounded-sm border border-dashed border-border py-1.5 text-[13px] text-muted-foreground hover:border-keel hover:text-foreground focus-visible:border-keel focus-visible:outline-none"
+          >
+            Add a repository
+          </button>
+          {error !== undefined && (
+            <p className="px-2 pt-2 text-[13px] leading-relaxed text-destructive">{error}</p>
+          )}
         </div>
 
-        {workspace !== undefined && (
+        {workspace?.state === 'ready' && (
           <>
             <form
               className="pb-3"
@@ -113,7 +142,9 @@ export default function App() {
           <p className="max-w-[40ch] text-[15px] leading-relaxed text-muted-foreground">
             {workspace === undefined
               ? 'Pick a repository to work in. Everything the agent does stays visible, and nothing runs until you allow it.'
-              : `Open a ticket in ${workspace.name} to start a session.`}
+              : workspace.state === 'ready'
+                ? `Open a ticket in ${workspace.name} to start a session.`
+                : workspace.reason}
           </p>
         ) : (
           <p className="max-w-[40ch] text-[13px] text-muted-foreground">
@@ -121,6 +152,12 @@ export default function App() {
           </p>
         )}
       </main>
+
+      <DirectoryPicker
+        open={picking}
+        onOpenChange={setPicking}
+        onChoose={(chosen) => void add(chosen)}
+      />
 
       <ChatColumn store={store} ticketId={route.ticketId} />
     </div>

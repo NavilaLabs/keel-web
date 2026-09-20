@@ -4,33 +4,46 @@ A web UI for [keel](https://github.com/NavilaLabs/keel). It lets you chat with C
 
 ## Development
 
-Keel keeps its ticket artifacts in a separate repository (`keel-web-tickets`). Clone it next to this one and point `KEEL_TICKET_REPO` at it on the host, for example `export KEEL_TICKET_REPO=$HOME/projects/keel-web-tickets`. The devcontainer mounts it at `~/projects/keel-web-tickets`, where keel expects it, and refuses to start if the variable is unset or the directory is missing.
+keel-web runs on the machine you work on, beside the Claude Code it drives. The
+agent is a child of the server process, so it runs as you, sees your
+repositories and uses the login you already have. Nothing is mounted, nothing
+is containerised, and there is no second Claude identity to keep logged in.
 
-Open the repository in the devcontainer (VS Code "Reopen in Container" or `devcontainer up`). On first start, run `claude` inside the container once to log in; the login is kept in a named volume.
+You need Node 22 and a Claude Code login (`claude` once in a terminal, or any
+of the other ways Claude Code accepts a credential). keel-web never checks for
+one itself: it starts the agent and reports what the agent says.
+
+Keel keeps its ticket artifacts in a separate repository (`keel-web-tickets`).
+Clone it next to this one; each workspace's `.claude/keel.json` says where its
+own ticket repository is.
 
 ```sh
+npm install
 npm run dev
 ```
 
-The client (Vite + React) runs on http://localhost:5173 and proxies `/api` to the server (Hono on Node) on port 3000.
+The client (Vite + React) runs on http://localhost:5173 and proxies `/api` to
+the server (Hono on Node) on port 3000. Both listen on this machine only:
+reaching the server means reaching an agent that acts as you.
 
 ## Tooling
 
-All tooling runs in the `dev` service of `compose.yaml`, so the host needs only Docker and git. Start the service once and enable the git hook on the host:
+Everything runs on the host:
 
 ```sh
-export KEEL_TICKET_REPO=$HOME/projects/keel-web-tickets
-docker compose up -d dev
-docker compose exec -u root dev sh scripts/setup-container.sh
-git config core.hooksPath .githooks
+npm run lint
+npm run format
+npm test
 ```
 
-Run commands with `docker compose exec dev`:
+Enable the git hook once with `git config core.hooksPath .githooks`. It runs
+lint and the format check before a commit, which is what CI runs too.
+
+`compose.yaml` is left for one job: running the test suite in a fixed
+environment, with no Claude login and no ports. Its dependencies live in named
+volumes, so install them once:
 
 ```sh
-docker compose exec dev npm run lint
-docker compose exec dev npm run format
-docker compose exec dev npm test
+docker compose run --rm -u root test sh scripts/setup-container.sh
+docker compose run --rm test
 ```
-
-The pre-commit hook runs `prek`, which checks lint and formatting in the container. Committing while the container is stopped fails with a message. CI runs the same checks natively on GitHub Actions.

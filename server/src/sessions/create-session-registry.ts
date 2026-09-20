@@ -1,12 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { access } from 'node:fs/promises'
-import { join } from 'node:path'
-import {
-  query,
-  type Options,
-  type SDKMessage,
-  type SDKUserMessage,
-} from '@anthropic-ai/claude-agent-sdk'
+import { query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type {
   PermissionDecision,
   PermissionRequest,
@@ -18,41 +11,16 @@ import type { Logger } from '../logging/types.js'
 import { createPermissionGate } from '../permissions/index.js'
 import type { PermissionGate } from '../permissions/types.js'
 import type { TranscriptLog } from '../transcript/types.js'
-import type { WorkspaceRegistry } from '../workspaces/types.js'
 import { deltaTextOf, normalise } from './normalise.js'
 import {
-  AuthRequiredError,
-  SessionStartError,
   UnknownWorkspaceError,
-  type Session,
+  type RunQuery,
   type SessionRegistry,
+  type SessionRegistryOptions,
   type Unsubscribe,
 } from './types.js'
 
-/**
- * Starts an agent run.
- *
- * Narrower than the SDK's own `query`, which returns a generator with control
- * methods the registry does not use: it drives the run through its own
- * `AbortController` instead.
- */
-export type RunQuery = (parameters: {
-  prompt: AsyncIterable<SDKUserMessage>
-  options: Options
-}) => AsyncIterable<SDKMessage>
-
-export interface SessionRegistryOptions {
-  /** Resolves a workspace to the repository an agent runs in. */
-  workspaces: WorkspaceRegistry
-  /** Claude Code's configuration directory, holding the credentials. */
-  configDirectory: string
-  transcript: TranscriptLog
-  logger: Logger
-  /** Milliseconds to wait for the agent to report its session id. */
-  startTimeoutMs?: number
-  /** The agent runner. Injected so the registry can be driven without a real agent. */
-  runQuery?: RunQuery
-}
+export type { RunQuery, SessionRegistryOptions }
 
 interface SessionState {
   key: SessionKey
@@ -69,8 +37,6 @@ interface InputQueue {
   close: () => void
   stream: AsyncGenerator<SDKUserMessage>
 }
-
-const authenticationHints = ['/login', 'invalid api key', 'not logged in', 'unauthorized']
 
 function createInputQueue(): InputQueue {
   const waiting: string[] = []
@@ -115,9 +81,17 @@ function questionsOf(toolName: string, input: Record<string, unknown>): Question
   return Array.isArray(questions) ? (questions as Question[]) : undefined
 }
 
-function looksLikeAuthenticationFailure(text: string): boolean {
-  const lowered = text.toLowerCase()
-  return authenticationHints.some((hint) => lowered.includes(hint))
+/**
+ * What the developer is told when the agent never reached readiness.
+ *
+ * The agent's own output is kept, because a missing login is only the
+ * likeliest cause of an early exit, not the certain one.
+ */
+function notReadyMessage(output: string): string {
+  return (
+    'Claude Code gave up before it was ready, most likely because it has no login. ' +
+    `The agent said: ${output}`
+  )
 }
 
 function identity(key: SessionKey): string {
@@ -126,7 +100,6 @@ function identity(key: SessionKey): string {
 
 export function createSessionRegistry(options: SessionRegistryOptions): SessionRegistry {
   const { workspaces, configDirectory, transcript, logger } = options
-  const startTimeoutMs = options.startTimeoutMs ?? 60_000
   const runQuery = options.runQuery ?? query
 
   const sessions = new Map<string, SessionState>()
@@ -144,16 +117,6 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
       )
     }
     return workspace.path
-  }
-
-  async function assertLoggedIn(): Promise<void> {
-    try {
-      await access(join(configDirectory, '.credentials.json'))
-    } catch {
-      throw new AuthRequiredError(
-        'Claude Code is not logged in inside the container. Run `claude` in it once.',
-      )
-    }
   }
 
   function broadcast(state: SessionState, message: StreamMessage): void {
@@ -191,6 +154,10 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
     return {
       cwd: repository,
       resume,
+      // Replaces the child's environment rather than extending it, so the
+      // server's own has to be spread in first. Passing the directory here is
+      // what keeps agent and server on the same one.
+      env: { ...process.env, CLAUDE_CONFIG_DIR: configDirectory },
       includePartialMessages: true,
       abortController: state.abort,
       stderr: (data) => {
@@ -237,7 +204,6 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
 
   async function start(key: SessionKey): Promise<SessionState> {
     const repository = repositoryOf(key)
-    await assertLoggedIn()
 
     const state: SessionState = {
       key,
@@ -255,12 +221,11 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
       options: optionsFor(state, repository, resume),
     })
 
-    let announce: ((sessionId: string) => void) | undefined
-    let fail: ((error: Error) => void) | undefined
-    const ready = new Promise<string>((resolve, reject) => {
-      announce = resolve
-      fail = reject
-    })
+    // Registered before the run produces anything, because the agent only
+    // announces itself once a turn begins and a turn begins with a message
+    // through `send`, which needs this entry to exist.
+    sessions.set(identity(key), state)
+    let produced = false
 
     void (async () => {
       try {
@@ -273,54 +238,41 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
           for (const body of normalise(message)) {
             if (body.type === 'session.started') {
               state.sessionId = body.sessionId
+              produced = true
               await record(state, { ...body, resumed: resume !== undefined })
-              announce?.(body.sessionId)
+              state.logger.info(
+                { sessionId: body.sessionId, resumed: resume !== undefined },
+                'session ready',
+              )
               continue
             }
+            produced = true
             await record(state, body)
           }
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        const authentication = looksLikeAuthenticationFailure(message)
-        state.logger.error({ err: message }, 'agent session ended with an error')
-        await record(state, {
-          type: 'session.failed',
-          code: authentication ? 'auth_required' : 'agent_error',
-          message: authentication
-            ? 'Claude Code is not logged in inside the container. Run `claude` in it once.'
-            : message,
-        })
-        fail?.(authentication ? new AuthRequiredError(message) : new SessionStartError(message))
+        const output = error instanceof Error ? error.message : String(error)
+        state.logger.error({ err: output }, 'agent session ended with an error')
+        // An agent that never produced anything never authenticated, so far
+        // as this process can tell. One that did and then failed is a running
+        // session that died, which is a different thing entirely.
+        if (produced) {
+          await record(state, { type: 'session.failed', code: 'agent_error', message: output })
+        } else {
+          await record(state, {
+            type: 'session.failed',
+            code: 'auth_required',
+            message: notReadyMessage(output),
+          })
+        }
       } finally {
         state.gate.close()
         sessions.delete(identity(key))
       }
     })()
 
-    const timeout = new Promise<never>((_, reject) => {
-      const timer = setTimeout(
-        () => reject(new SessionStartError('The agent did not report a session in time.')),
-        startTimeoutMs,
-      )
-      timer.unref()
-    })
-
-    await Promise.race([ready, timeout])
-    sessions.set(identity(key), state)
-    state.logger.info(
-      { sessionId: state.sessionId, resumed: resume !== undefined },
-      'session ready',
-    )
+    state.logger.info({ resumed: resume !== undefined }, 'session started')
     return state
-  }
-
-  function toSession(state: SessionState): Session {
-    return {
-      key: state.key,
-      sessionId: state.sessionId,
-      pendingPermissions: () => state.gate.pending(),
-    }
   }
 
   function sessionFor(key: SessionKey): SessionState {
@@ -332,15 +284,17 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
   return {
     async attach(key) {
       const id = identity(key)
-      const running = sessions.get(id)
-      if (running !== undefined) return toSession(running)
+      if (sessions.has(id)) return
 
       const inFlight = starting.get(id)
-      if (inFlight !== undefined) return toSession(await inFlight)
+      if (inFlight !== undefined) {
+        await inFlight
+        return
+      }
 
       const attempt = start(key).finally(() => starting.delete(id))
       starting.set(id, attempt)
-      return toSession(await attempt)
+      await attempt
     },
 
     async send(key, text) {

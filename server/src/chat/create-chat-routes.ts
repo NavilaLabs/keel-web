@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import type { ClientCommand, ServerEvent, SessionKey, StreamMessage } from '@keel-web/protocol'
 import type { LoggerVariables } from '../logging/types.js'
-import { AuthRequiredError, UnknownWorkspaceError } from '../sessions/types.js'
+import { UnknownWorkspaceError } from '../sessions/types.js'
 import type { ChatDependencies, CreateChatRoutes } from './types.js'
 
 function isRecordedEvent(message: StreamMessage): message is ServerEvent {
@@ -49,15 +49,16 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
       try {
         await sessions.attach(key)
       } catch (error) {
-        const authentication = error instanceof AuthRequiredError
-        const unknown = error instanceof UnknownWorkspaceError
+        // Only an unusable workspace lands here. What the agent gets wrong,
+        // a missing login included, arrives as a recorded session.failed
+        // event once it has had a turn to run.
         await stream.writeSSE({
           event: 'session.failed',
           data: JSON.stringify({
             type: 'session.failed',
             ...key,
             seq: 0,
-            code: authentication && !unknown ? 'auth_required' : 'startup_failed',
+            code: error instanceof UnknownWorkspaceError ? 'startup_failed' : 'agent_error',
             message: error instanceof Error ? error.message : String(error),
           }),
         })
@@ -95,11 +96,17 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
         void send(message)
       })
 
-      const abort = () => {
+      // Both paths can fire, and the stream's own abort can arrive after the
+      // finally block has already run. The contract is one detach per viewer,
+      // so the first one wins and the rest are ignored.
+      let detached = false
+      const detach = () => {
+        if (detached) return
+        detached = true
         unsubscribe()
       }
-      context.req.raw.signal.addEventListener('abort', abort, { once: true })
-      stream.onAbort(abort)
+      context.req.raw.signal.addEventListener('abort', detach, { once: true })
+      stream.onAbort(detach)
 
       try {
         for (const event of await transcript.since(key, resumeFrom)) {
@@ -115,7 +122,7 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
           context.req.raw.signal.addEventListener('abort', () => resolve(), { once: true })
         })
       } finally {
-        unsubscribe()
+        detach()
         logger.info(
           {
             ...key,
