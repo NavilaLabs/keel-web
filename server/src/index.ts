@@ -7,6 +7,7 @@ import { createArtifactReader, createArtifactRoutes } from './artifacts/index.js
 import { createChatRoutes } from './chat/index.js'
 import { createHintFollower, createHintRoutes } from './hints/index.js'
 import { createDirectoryBrowser, createDirectoryRoutes } from './directories/index.js'
+import { createFileIndex, createFileRoutes } from './files/index.js'
 import { logger, requestLogger, type LoggerVariables } from './logging/index.js'
 import { createHostGuard } from './security/index.js'
 import { createSessionRegistry } from './sessions/index.js'
@@ -44,6 +45,7 @@ app.route('/api', createChatRoutes({ sessions, transcript, workspaces }))
 app.route('/api', createArtifactRoutes({ artifacts, workspaces }))
 app.route('/api', createArchitectureRoutes({ architecture, workspaces }))
 app.route('/api', createHintRoutes({ hints, workspaces }))
+app.route('/api', createFileRoutes({ files: createFileIndex({ workspaces, logger }), workspaces }))
 
 const port = Number(process.env.PORT ?? 3000)
 
