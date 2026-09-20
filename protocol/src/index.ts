@@ -1,4 +1,6 @@
 export type * from './architecture.js'
 export type * from './artifacts.js'
 export type * from './events.js'
+export type * from './files.js'
 export type * from './hints.js'
+export type * from './session-controls.js'

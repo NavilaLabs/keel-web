@@ -1,10 +1,19 @@
 import type { PermissionDecision, ServerEvent, SessionKey } from '@keel-web/protocol'
 import type { CloseStream, Connection } from '../connection/types.ts'
+import type { SessionControlsStore } from '../session-controls/types.ts'
 import { fold } from './fold.ts'
 import type { RenderItem, TranscriptStore, Unsubscribe } from './types.ts'
 
 export interface TranscriptStoreOptions {
   connection: Connection
+  /**
+   * Where what the session runs with is passed on to.
+   *
+   * There is one stream per session and this store owns it, so the controls
+   * arrive here and belong somewhere else. Left out, they are dropped, which
+   * is what a test that only cares about the transcript wants.
+   */
+  controls?: Pick<SessionControlsStore, 'take' | 'pointAt'>
   /**
    * Batches delta notifications.
    *
@@ -85,6 +94,7 @@ export function createTranscriptStore(options: TranscriptStoreOptions): Transcri
       if (same && close !== undefined) return
       reset()
       key = next
+      options.controls?.pointAt(next)
       notify(transcriptListeners)
       notify(draftListeners)
 
@@ -93,6 +103,9 @@ export function createTranscriptStore(options: TranscriptStoreOptions): Transcri
         onDelta: (delta) => {
           draft += delta.text
           scheduleDraftNotification()
+        },
+        onControls: (message) => {
+          options.controls?.take(message)
         },
         onFatal: () => {
           close = undefined

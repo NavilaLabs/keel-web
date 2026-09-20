@@ -3,17 +3,27 @@ import type { ArtifactRef } from '@keel-web/protocol'
 import { Centre } from './artifacts/centre.tsx'
 import { useCentre } from './artifacts/use-centre.ts'
 import { ChatColumn } from './chat/chat-column.tsx'
+import { createDraftBook } from './composer/create-draft-book.ts'
 import { createHintListener } from './hints/create-hint-listener.ts'
 import { createConnection } from './connection/create-connection.ts'
 import { DirectoryPicker } from './directories/directory-picker.tsx'
 import { useRoute } from './routing/use-route.ts'
+import { createSessionControlsStore } from './session-controls/create-session-controls-store.ts'
 import { createTranscriptStore } from './transcript/create-transcript-store.ts'
 import { useWorkspaces } from './workspaces/use-workspaces.ts'
 
 export default function App() {
   const { route, navigate } = useRoute()
   const { workspaces, loading, error, add, remove } = useWorkspaces()
-  const store = useMemo(() => createTranscriptStore({ connection: createConnection('/api') }), [])
+  const { store, controls, drafts } = useMemo(() => {
+    const connection = createConnection('/api')
+    const controlsStore = createSessionControlsStore({ connection })
+    return {
+      store: createTranscriptStore({ connection, controls: controlsStore }),
+      controls: controlsStore,
+      drafts: createDraftBook(),
+    }
+  }, [])
   const [opened, setOpened] = useState<string[]>(() =>
     route.ticketId === undefined ? [] : [route.ticketId],
   )
@@ -219,7 +229,13 @@ export default function App() {
         onChoose={(chosen) => void add(chosen)}
       />
 
-      <ChatColumn store={store} ticketId={route.ticketId} />
+      <ChatColumn
+        store={store}
+        controls={controls}
+        drafts={drafts}
+        workspaceId={route.workspaceId}
+        ticketId={route.ticketId}
+      />
     </div>
   )
 }

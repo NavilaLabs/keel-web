@@ -1,18 +1,33 @@
-import type { PermissionDecision, TicketId } from '@keel-web/protocol'
-import { useEffect, useRef, useState } from 'react'
+import type { PermissionDecision, TicketId, WorkspaceId } from '@keel-web/protocol'
+import { useEffect, useRef } from 'react'
+import { Composer } from '../composer/composer.tsx'
+import type { DraftBook } from '../composer/types.ts'
+import { nextMode } from '../session-controls/modes.ts'
+import { StatusLine } from '../session-controls/status-line.tsx'
+import type { SessionControlsStore } from '../session-controls/types.ts'
+import { useSessionControls } from '../session-controls/use-session-controls.ts'
 import type { TranscriptStore } from '../transcript/types.ts'
 import { useDraft, useTranscript } from '../transcript/use-transcript.ts'
 import { Transcript } from './transcript.tsx'
 
 interface ChatColumnProperties {
   store: TranscriptStore
+  controls: SessionControlsStore
+  drafts: DraftBook
+  workspaceId: WorkspaceId | undefined
   ticketId: TicketId | undefined
 }
 
-export function ChatColumn({ store, ticketId }: ChatColumnProperties) {
+export function ChatColumn({
+  store,
+  controls,
+  drafts,
+  workspaceId,
+  ticketId,
+}: ChatColumnProperties) {
   const items = useTranscript(store)
   const draft = useDraft(store)
-  const [text, setText] = useState('')
+  const sessionControls = useSessionControls(controls)
   const bottom = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -27,11 +42,10 @@ export function ChatColumn({ store, ticketId }: ChatColumnProperties) {
     void store.answer(requestId, decision)
   }
 
-  const submit = () => {
-    const message = text.trim()
-    if (message === '') return
-    setText('')
-    void store.send(message)
+  const cycleMode = () => {
+    const current = controls.getControls()
+    if (current === undefined) return
+    void controls.change({ mode: nextMode(current.settings.mode) })
   }
 
   const running = items.some((item) => item.kind === 'tool' && item.result === undefined)
@@ -63,30 +77,17 @@ export function ChatColumn({ store, ticketId }: ChatColumnProperties) {
         <div ref={bottom} />
       </div>
 
-      <form
-        className="border-t border-border px-5 py-4"
-        onSubmit={(submitted) => {
-          submitted.preventDefault()
-          submit()
-        }}
-      >
-        <textarea
-          rows={3}
-          value={text}
-          placeholder="Message Claude Code"
-          onChange={(changed) => setText(changed.target.value)}
-          onKeyDown={(pressed) => {
-            if (pressed.key === 'Enter' && !pressed.shiftKey) {
-              pressed.preventDefault()
-              submit()
-            }
-          }}
-          className="w-full resize-none rounded-sm border border-input bg-background px-3 py-2 text-[15px] leading-relaxed placeholder:text-muted-foreground focus-visible:border-keel focus-visible:outline-none"
+      <div className="border-t border-border px-5 py-4">
+        <Composer
+          key={`${workspaceId ?? ''}/${ticketId}`}
+          session={workspaceId === undefined ? undefined : { workspaceId, ticketId }}
+          commands={sessionControls?.commands ?? []}
+          drafts={drafts}
+          onSend={(message) => void store.send(message)}
+          onCycleMode={cycleMode}
         />
-        <p className="pt-1.5 text-[12px] text-muted-foreground">
-          Enter sends, shift and enter starts a line.
-        </p>
-      </form>
+        <StatusLine store={controls} />
+      </div>
     </aside>
   )
 }

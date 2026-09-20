@@ -2,11 +2,31 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import type { ClientCommand, ServerEvent, SessionKey, StreamMessage } from '@keel-web/protocol'
 import type { LoggerVariables } from '../logging/types.js'
-import { UnknownWorkspaceError } from '../sessions/types.js'
+import { UnknownWorkspaceError, UnusableSettingsError } from '../sessions/types.js'
 import type { ChatDependencies, CreateChatRoutes } from './types.js'
 
 function isRecordedEvent(message: StreamMessage): message is ServerEvent {
   return 'seq' in message
+}
+
+const offeredModes = ['default', 'auto', 'acceptEdits', 'dontAsk', 'plan']
+const effortLevels = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * Whether this is a change the wire contract allows.
+ *
+ * A mode outside the four keel-web offers is malformed rather than refused,
+ * so naming `bypassPermissions` reaches nothing that could act on it.
+ */
+function isSettingsChange(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const { model, mode, effort } = value as { model?: unknown; mode?: unknown; effort?: unknown }
+  if (model !== undefined && model !== null && typeof model !== 'string') return false
+  if (mode !== undefined && !offeredModes.includes(mode as string)) return false
+  if (effort !== undefined && effort !== null && !effortLevels.includes(effort as string)) {
+    return false
+  }
+  return true
 }
 
 function parseCommand(body: unknown): ClientCommand | undefined {
@@ -23,6 +43,11 @@ function parseCommand(body: unknown): ClientCommand | undefined {
     return typeof candidate.requestId === 'string' && known ? (body as ClientCommand) : undefined
   }
   if (command === 'interrupt') return body as ClientCommand
+  if (command === 'settings') {
+    return isSettingsChange((body as { change?: unknown }).change)
+      ? (body as ClientCommand)
+      : undefined
+  }
   return undefined
 }
 
@@ -117,6 +142,18 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
         }
         live = true
 
+        // What the session runs with is never recorded and therefore never
+        // replayed, so a viewer arriving at a quiet session would see no
+        // model and no commands until something changed. Sent once the
+        // subscription is live, so a change racing this one is delivered
+        // rather than lost behind it.
+        try {
+          const controls = await sessions.controls(key)
+          await send({ type: 'session.controls', ...key, controls })
+        } catch (error) {
+          logger.warn({ ...key, err: String(error) }, 'stream could not send the session controls')
+        }
+
         logger.info({ ...key, resumeFrom }, 'stream attached')
         await new Promise<void>((resolve) => {
           context.req.raw.signal.addEventListener('abort', () => resolve(), { once: true })
@@ -157,6 +194,13 @@ export const createChatRoutes: CreateChatRoutes = (dependencies: ChatDependencie
         await sessions.send(key, command.text)
       } else if (command.command === 'interrupt') {
         await sessions.interrupt(key)
+      } else if (command.command === 'settings') {
+        try {
+          await sessions.changeControls(key, command.change)
+        } catch (error) {
+          if (!(error instanceof UnusableSettingsError)) throw error
+          return context.json({ error: error.message }, 409)
+        }
       } else {
         const answered = await sessions.answerPermission(key, command.requestId, command.decision)
         if (!answered) {

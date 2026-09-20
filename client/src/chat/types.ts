@@ -13,8 +13,8 @@ export interface TranscriptProperties {
  *
  * The input is shown in full: a command is never truncated, a file path is
  * shown relative to the repository root and flagged when it points outside.
- * `request.questions` is present exactly for `AskUserQuestion`, and then the
- * answer must be the `answers` decision rather than allow or deny.
+ * A request carrying questions is the agent asking rather than waiting, and
+ * is answered elsewhere.
  *
  * Denying opens a reason field first, because the message reaches the agent
  * and an empty one is a worse answer than a reason.

@@ -1,10 +1,24 @@
 import { randomUUID } from 'node:crypto'
-import { query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import {
+  query,
+  type ModelInfo,
+  type Options,
+  type PermissionResult,
+  type PermissionUpdate,
+  type SDKUserMessage,
+  type SlashCommand,
+} from '@anthropic-ai/claude-agent-sdk'
 import type {
+  ModelChoice,
   PermissionDecision,
   PermissionRequest,
   Question,
+  SessionControls,
   SessionKey,
+  SessionMode,
+  SessionSettings,
+  SessionSettingsChange,
+  SlashCommandSummary,
   StreamMessage,
 } from '@keel-web/protocol'
 import type { Logger } from '../logging/types.js'
@@ -14,9 +28,11 @@ import type { TranscriptLog } from '../transcript/types.js'
 import { deltaTextOf, normalise } from './normalise.js'
 import {
   UnknownWorkspaceError,
+  UnusableSettingsError,
   type RunQuery,
   type SessionRegistry,
   type SessionRegistryOptions,
+  type SessionRun,
   type Unsubscribe,
 } from './types.js'
 
@@ -30,6 +46,20 @@ interface SessionState {
   input: InputQueue
   abort: AbortController
   logger: Logger
+  run: SessionRun
+  settings: SessionSettings
+  models: readonly ModelChoice[]
+  commands: readonly SlashCommandSummary[]
+  /** Resolves once the agent has answered with its commands and models. */
+  catalogue: Promise<void>
+  /**
+   * Tools a session rule now covers.
+   *
+   * Only the tool name, because what the rule actually matches is the agent's
+   * to decide: this says no more than that the hook should stop forcing the
+   * ask for it and let that rule be reached.
+   */
+  ruled: Set<string>
 }
 
 interface InputQueue {
@@ -98,6 +128,39 @@ function identity(key: SessionKey): string {
   return `${key.workspaceId}/${key.ticketId}`
 }
 
+const offeredModes: readonly SessionMode[] = ['default', 'auto', 'acceptEdits', 'dontAsk', 'plan']
+
+function modelChoiceOf(info: ModelInfo): ModelChoice {
+  return {
+    value: info.value,
+    displayName: info.displayName,
+    description: info.description,
+    effortLevels: info.supportsEffort === true ? (info.supportedEffortLevels ?? []) : [],
+  }
+}
+
+function commandSummaryOf(command: SlashCommand): SlashCommandSummary {
+  return {
+    name: command.name,
+    description: command.description,
+    argumentHint: command.argumentHint,
+    ...(command.aliases !== undefined && { aliases: command.aliases }),
+    ...(command.builtin !== undefined && { builtin: command.builtin }),
+  }
+}
+
+/**
+ * The suggestions, rewritten so none of them outlives the session.
+ *
+ * The agent proposes where a rule should be written, and some of those places
+ * are the developer's own settings files. Nothing here is allowed to leave a
+ * trace on disk, so every destination becomes `session` rather than being
+ * taken as offered.
+ */
+function sessionScoped(suggestions: readonly PermissionUpdate[]): PermissionUpdate[] {
+  return suggestions.map((suggestion) => ({ ...suggestion, destination: 'session' as const }))
+}
+
 export function createSessionRegistry(options: SessionRegistryOptions): SessionRegistry {
   const { workspaces, configDirectory, transcript, logger } = options
   const runQuery = options.runQuery ?? query
@@ -131,19 +194,55 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
   }
 
   function permissionResultOf(
+    state: SessionState,
     decision: PermissionDecision,
     input: Record<string, unknown>,
-  ):
-    | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
-    | {
-        behavior: 'deny'
-        message: string
-      } {
+    suggestions: readonly PermissionUpdate[],
+  ): PermissionResult {
     if (decision.decision === 'deny') return { behavior: 'deny', message: decision.message }
     if (decision.decision === 'answers') {
       return { behavior: 'allow', updatedInput: { ...input, answers: decision.answers } }
     }
-    return { behavior: 'allow' }
+    if (decision.alwaysAllow !== true || suggestions.length === 0) return { behavior: 'allow' }
+
+    const updatedPermissions = sessionScoped(suggestions)
+    for (const update of updatedPermissions) {
+      if (update.type !== 'addRules') continue
+      for (const rule of update.rules) state.ruled.add(rule.toolName)
+    }
+    return { behavior: 'allow', updatedPermissions, decisionClassification: 'user_permanent' }
+  }
+
+  /**
+   * Takes over what the agent says it is running with.
+   *
+   * The agent can change both by itself, leaving plan mode being the usual
+   * case, and it is the one that knows. A mode keel-web does not offer is
+   * ignored rather than shown, because nothing here can be switched back to
+   * it.
+   */
+  function adoptAgentSettings(state: SessionState, model: unknown, mode: unknown): void {
+    const known = offeredModes.find((offered) => offered === mode)
+    if (known !== undefined) state.settings.mode = known
+    if (typeof model === 'string' && model.length > 0) state.settings.model = model
+    announceControls(state)
+  }
+
+  /** The model a change would leave the session on, as far as it is known. */
+  function chosenModel(
+    state: SessionState,
+    change: SessionSettingsChange,
+  ): ModelChoice | undefined {
+    const value = change.model === undefined ? state.settings.model : (change.model ?? undefined)
+    return value === undefined ? undefined : state.models.find((model) => model.value === value)
+  }
+
+  function controlsOf(state: SessionState): SessionControls {
+    return { settings: { ...state.settings }, models: state.models, commands: state.commands }
+  }
+
+  function announceControls(state: SessionState): void {
+    broadcast(state, { type: 'session.controls', ...state.key, controls: controlsOf(state) })
   }
 
   function optionsFor(
@@ -163,25 +262,36 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
       stderr: (data) => {
         state.logger.warn({ stderr: data.trim() }, 'agent stderr')
       },
-      // Runs before every tool call, whatever the rules and the mode say, so
-      // that nothing can be approved without the browser having seen it.
+      // In its default mode the browser is asked about every tool call, which
+      // is stricter than the agent would be on its own. Any other mode is the
+      // developer having said in advance what need not be asked, so the hook
+      // steps aside and lets the agent resolve the call the way the terminal
+      // would. It steps aside for a tool a session rule now covers too, or
+      // that rule could never be reached.
       hooks: {
         PreToolUse: [
           {
             hooks: [
-              () =>
-                Promise.resolve({
+              (input) => {
+                const mode = input.permission_mode ?? state.settings.mode
+                const toolName = (input as { tool_name?: string }).tool_name ?? ''
+                if (mode !== 'default' || state.ruled.has(toolName)) return Promise.resolve({})
+                return Promise.resolve({
                   hookSpecificOutput: {
                     hookEventName: 'PreToolUse' as const,
                     permissionDecision: 'ask' as const,
                     permissionDecisionReason: 'keel-web asks the developer in the browser',
                   },
-                }),
+                })
+              },
             ],
           },
         ],
       },
-      canUseTool: async (toolName, input, { signal }) => {
+      canUseTool: async (toolName, input, options) => {
+        const { signal, defaultToNo, suppressAlwaysAllowRule } = options
+        const suggestions = options.suggestions ?? []
+        const alwaysAllowable = suppressAlwaysAllowRule !== true && suggestions.length > 0
         const request: PermissionRequest = {
           requestId: randomUUID(),
           toolName,
@@ -189,6 +299,8 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
           ...(questionsOf(toolName, input) !== undefined && {
             questions: questionsOf(toolName, input),
           }),
+          ...(alwaysAllowable && { alwaysAllowable: true }),
+          ...(defaultToNo === true && { defaultToNo: true }),
         }
         await record(state, { type: 'permission.requested', request })
         const decision = await state.gate.hold(request, signal)
@@ -197,15 +309,40 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
           requestId: request.requestId,
           decision,
         })
-        return permissionResultOf(decision, input)
+        return permissionResultOf(state, decision, input, alwaysAllowable ? suggestions : [])
       },
+    }
+  }
+
+  /**
+   * Asks the agent what it offers.
+   *
+   * Never rejects: an agent that cannot answer, which is what no login looks
+   * like from here, leaves the lists empty rather than making the session
+   * unusable. The failure the developer needs to see is the one the run
+   * itself reports.
+   */
+  async function loadCatalogue(state: SessionState): Promise<void> {
+    try {
+      const [commands, models] = await Promise.all([
+        state.run.supportedCommands(),
+        state.run.supportedModels(),
+      ])
+      state.commands = commands.map(commandSummaryOf)
+      state.models = models.map(modelChoiceOf)
+      announceControls(state)
+    } catch (error) {
+      state.logger.warn({ err: String(error) }, 'the agent did not say what it offers')
     }
   }
 
   async function start(key: SessionKey): Promise<SessionState> {
     const repository = repositoryOf(key)
 
-    const state: SessionState = {
+    // The run needs options that read this state, and the state needs the run
+    // the options produce, so the two are tied together in that order rather
+    // than in one expression.
+    const state = {
       key,
       sessionId: '',
       gate: createPermissionGate(),
@@ -213,13 +350,19 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
       input: createInputQueue(),
       abort: new AbortController(),
       logger: logger.child({ ...key }),
-    }
+      settings: { mode: 'default' },
+      models: [],
+      commands: [],
+      ruled: new Set<string>(),
+    } as unknown as SessionState
 
     const resume = await transcript.lastSessionId(key)
     const run = runQuery({
       prompt: state.input.stream,
       options: optionsFor(state, repository, resume),
     })
+    state.run = run
+    state.catalogue = loadCatalogue(state)
 
     // Registered before the run produces anything, because the agent only
     // announces itself once a turn begins and a turn begins with a message
@@ -234,6 +377,14 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
           if (delta !== undefined) {
             broadcast(state, { type: 'assistant.delta', ...key, text: delta })
             continue
+          }
+          if (message.type === 'system' && message.subtype === 'commands_changed') {
+            state.commands = message.commands.map(commandSummaryOf)
+            announceControls(state)
+            continue
+          }
+          if (message.type === 'system' && message.subtype === 'init') {
+            adoptAgentSettings(state, message.model, message.permissionMode)
           }
           for (const body of normalise(message)) {
             if (body.type === 'session.started') {
@@ -311,6 +462,49 @@ export function createSessionRegistry(options: SessionRegistryOptions): SessionR
       const state = sessions.get(identity(key))
       if (state === undefined) return
       state.abort.abort()
+    },
+
+    async controls(key) {
+      const state = sessionFor(key)
+      await state.catalogue
+      return controlsOf(state)
+    },
+
+    async changeControls(key, change) {
+      const state = sessionFor(key)
+      await state.catalogue
+      const chosen = chosenModel(state, change)
+
+      if (change.model !== undefined && change.model !== null && chosen === undefined) {
+        throw new UnusableSettingsError(`This session cannot run on ${change.model}.`)
+      }
+      if (
+        change.effort !== undefined &&
+        change.effort !== null &&
+        chosen !== undefined &&
+        !chosen.effortLevels.includes(change.effort)
+      ) {
+        throw new UnusableSettingsError(
+          `${chosen.displayName} has no ${change.effort} effort to run at.`,
+        )
+      }
+
+      if (change.mode !== undefined) {
+        await state.run.setPermissionMode(change.mode)
+        state.settings.mode = change.mode
+      }
+      if (change.model !== undefined) {
+        await state.run.setModel(change.model ?? undefined)
+        if (change.model === null) delete state.settings.model
+        else state.settings.model = change.model
+      }
+      if (change.effort !== undefined) {
+        await state.run.applyFlagSettings({ effortLevel: change.effort })
+        if (change.effort === null) delete state.settings.effort
+        else state.settings.effort = change.effort
+      }
+
+      announceControls(state)
     },
 
     subscribe(key, listener): Unsubscribe {
