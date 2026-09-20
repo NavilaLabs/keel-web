@@ -1,4 +1,3 @@
-import type { PermissionDecision, Question } from '@keel-web/protocol'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button.tsx'
 import { ToolInput } from './tool-input.tsx'
@@ -12,102 +11,12 @@ function Frame({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Questions({
-  questions,
-  disabled,
-  onAnswer,
-}: {
-  questions: readonly Question[]
-  disabled: boolean
-  onAnswer: (decision: PermissionDecision) => void
-}) {
-  const [chosen, setChosen] = useState<Record<string, string[]>>({})
-
-  const toggle = (question: Question, label: string) => {
-    setChosen((previous) => {
-      const current = previous[question.question] ?? []
-      if (!question.multiSelect) return { ...previous, [question.question]: [label] }
-      return {
-        ...previous,
-        [question.question]: current.includes(label)
-          ? current.filter((entry) => entry !== label)
-          : [...current, label],
-      }
-    })
-  }
-
-  // The agent reads one comma separated string per question, keyed by the
-  // full question text.
-  const submit = () => {
-    onAnswer({
-      decision: 'answers',
-      answers: Object.fromEntries(
-        Object.entries(chosen).map(([question, labels]) => [question, labels.join(', ')]),
-      ),
-    })
-  }
-
-  const complete = questions.every((question) => (chosen[question.question] ?? []).length > 0)
-
-  return (
-    <div className="flex flex-col gap-5">
-      {questions.map((question) => (
-        <fieldset key={question.question} className="flex flex-col gap-1.5">
-          <legend className="mb-1.5 text-[15px] text-foreground">{question.question}</legend>
-          {question.options.map((option) => {
-            const selected = (chosen[question.question] ?? []).includes(option.label)
-            return (
-              <label
-                key={option.label}
-                className={`flex cursor-pointer gap-2.5 rounded-sm px-2 py-1.5 text-[13px] ${
-                  selected ? 'bg-hold/15' : 'hover:bg-foreground/5'
-                }`}
-              >
-                <input
-                  type={question.multiSelect ? 'checkbox' : 'radio'}
-                  name={question.question}
-                  checked={selected}
-                  disabled={disabled}
-                  onChange={() => toggle(question, option.label)}
-                  className="mt-1 accent-hold"
-                />
-                <span className="min-w-0">
-                  <span className="block text-foreground">{option.label}</span>
-                  <span className="block text-muted-foreground">{option.description}</span>
-                  {option.preview !== undefined && (
-                    <pre className="mt-1.5 overflow-x-auto bg-code p-2 font-mono text-[12px]">
-                      {option.preview}
-                    </pre>
-                  )}
-                </span>
-              </label>
-            )
-          })}
-        </fieldset>
-      ))}
-      <div>
-        <Button size="sm" disabled={disabled || !complete} onClick={submit}>
-          Send answer
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 export function PermissionPrompt({ request, answering, onAnswer }: PermissionPromptProperties) {
   // A call the agent flagged opens on its refusal, so that approving it is
   // never the thing that happens by reflex.
   const [reason, setReason] = useState<string | undefined>(
     request.defaultToNo === true ? '' : undefined,
   )
-
-  if (request.questions !== undefined) {
-    return (
-      <Frame>
-        <Questions questions={request.questions} disabled={answering} onAnswer={onAnswer} />
-      </Frame>
-    )
-  }
 
   return (
     <Frame>

@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { QuestionPrompt } from '../questions/question-prompt.tsx'
 import type { RenderItem } from '../transcript/types.ts'
 import { PermissionPrompt } from './permission-prompt.tsx'
 import { ToolInput } from './tool-input.tsx'
@@ -88,11 +89,21 @@ const Item = memo(function Item({
 
     case 'permission':
       return item.decision === undefined ? (
-        <PermissionPrompt
-          request={item.request}
-          answering={false}
-          onAnswer={(decision) => onAnswer(item.request.requestId, decision)}
-        />
+        // A question is the agent asking, not the agent waiting to run
+        // something, so the two are answered in different places.
+        item.request.questions !== undefined ? (
+          <QuestionPrompt
+            questions={item.request.questions}
+            answering={false}
+            onAnswer={(decision) => onAnswer(item.request.requestId, decision)}
+          />
+        ) : (
+          <PermissionPrompt
+            request={item.request}
+            answering={false}
+            onAnswer={(decision) => onAnswer(item.request.requestId, decision)}
+          />
+        )
       ) : (
         <Aside edge="border-border">
           <p className="text-[13px] text-muted-foreground">
