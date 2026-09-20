@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { createChatRoutes } from './chat/index.js'
+import { createDirectoryBrowser, createDirectoryRoutes } from './directories/index.js'
 import { logger, requestLogger, type LoggerVariables } from './logging/index.js'
 import { createSessionRegistry } from './sessions/index.js'
 import { createTranscriptLog } from './transcript/index.js'
@@ -24,6 +25,7 @@ app.use(requestLogger)
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 app.route('/api', createWorkspaceRoutes({ workspaces }))
+app.route('/api', createDirectoryRoutes({ directories: createDirectoryBrowser() }))
 app.route('/api', createChatRoutes({ sessions, transcript, workspaces }))
 
 const port = Number(process.env.PORT ?? 3000)

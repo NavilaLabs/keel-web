@@ -74,6 +74,34 @@ export type WorkspaceSummary = {
   | { state: 'unconfigured'; reason: string }
 )
 
+/** One subdirectory, as the picker shows it. */
+export interface DirectoryEntry {
+  /** The directory name on its own, which is what the list shows. */
+  name: string
+  /** The absolute path, so choosing an entry needs no path arithmetic in the browser. */
+  path: string
+}
+
+/**
+ * One directory of the machine keel-web runs on, for picking a repository.
+ *
+ * A browser cannot hand over a filesystem path: a directory picker yields a
+ * handle, and a directory input yields names relative to the chosen folder.
+ * Since the server runs on the same machine as the developer, it is the one
+ * that can walk the filesystem, and this is what it says back.
+ *
+ * Entries are subdirectories only, sorted by name without regard to case, and
+ * leave out anything starting with a dot. Files are absent because a workspace
+ * is always a directory.
+ */
+export interface DirectoryListing {
+  /** The directory that was listed, absolute and resolved. */
+  path: string
+  /** The directory above, absent only at the root of the filesystem. */
+  parent?: string
+  entries: readonly DirectoryEntry[]
+}
+
 export type RequestId = string
 
 export type ToolUseId = string

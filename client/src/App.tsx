@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChatColumn } from './chat/chat-column.tsx'
 import { createConnection } from './connection/create-connection.ts'
+import { DirectoryPicker } from './directories/directory-picker.tsx'
 import { useRoute } from './routing/use-route.ts'
 import { createTranscriptStore } from './transcript/create-transcript-store.ts'
 import { useWorkspaces } from './workspaces/use-workspaces.ts'
@@ -13,7 +14,7 @@ export default function App() {
     route.ticketId === undefined ? [] : [route.ticketId],
   )
   const [entry, setEntry] = useState('')
-  const [path, setPath] = useState('')
+  const [picking, setPicking] = useState(false)
 
   const workspace = workspaces.find((candidate) => candidate.id === route.workspaceId)
 
@@ -83,23 +84,13 @@ export default function App() {
             )
           })}
 
-          <form
-            className="pt-3"
-            onSubmit={(submitted) => {
-              submitted.preventDefault()
-              const entered = path.trim()
-              if (entered === '') return
-              setPath('')
-              void add(entered)
-            }}
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            className="mt-3 rounded-sm border border-dashed border-border py-1.5 text-[13px] text-muted-foreground hover:border-keel hover:text-foreground focus-visible:border-keel focus-visible:outline-none"
           >
-            <input
-              value={path}
-              placeholder="Add a repository path"
-              onChange={(changed) => setPath(changed.target.value)}
-              className="w-full rounded-sm border border-input bg-background px-2 py-1.5 font-mono text-[13px] placeholder:font-sans placeholder:text-muted-foreground focus-visible:border-keel focus-visible:outline-none"
-            />
-          </form>
+            Add a repository
+          </button>
           {error !== undefined && (
             <p className="px-2 pt-2 text-[13px] leading-relaxed text-destructive">{error}</p>
           )}
@@ -161,6 +152,12 @@ export default function App() {
           </p>
         )}
       </main>
+
+      <DirectoryPicker
+        open={picking}
+        onOpenChange={setPicking}
+        onChoose={(chosen) => void add(chosen)}
+      />
 
       <ChatColumn store={store} ticketId={route.ticketId} />
     </div>
