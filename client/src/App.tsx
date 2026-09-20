@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ArtifactRef } from '@keel-web/protocol'
+import { Centre } from './artifacts/centre.tsx'
+import { useCentre } from './artifacts/use-centre.ts'
 import { ChatColumn } from './chat/chat-column.tsx'
 import { createConnection } from './connection/create-connection.ts'
 import { DirectoryPicker } from './directories/directory-picker.tsx'
@@ -15,8 +18,16 @@ export default function App() {
   )
   const [entry, setEntry] = useState('')
   const [picking, setPicking] = useState(false)
+  const [collapsed, setCollapsed] = useState(route.ticketId !== undefined)
 
   const workspace = workspaces.find((candidate) => candidate.id === route.workspaceId)
+  const { centre, snapshot } = useCentre(route.workspaceId, route.ticketId)
+
+  // The URL says which artefact is open, so a deep link and a reload land on
+  // the same one. Opening it again is a no-op once it is already open.
+  useEffect(() => {
+    if (route.view === 'artifact' && route.artifact) centre?.open(route.artifact)
+  }, [route.view, route.artifact, centre])
 
   // The store owns the stream, so this only tells it which session to be on.
   useEffect(() => {
@@ -28,17 +39,45 @@ export default function App() {
   const openTicket = (ticketId: string) => {
     if (route.workspaceId === undefined) return
     setOpened((previous) => (previous.includes(ticketId) ? previous : [...previous, ticketId]))
+    setCollapsed(true)
     navigate({ workspaceId: route.workspaceId, ticketId, view: 'none' })
   }
 
   const openWorkspace = (workspaceId: string) => {
     setOpened([])
+    setCollapsed(false)
     navigate({ workspaceId, view: 'none' })
+  }
+
+  const openArtifact = (artifact: ArtifactRef) => {
+    if (route.workspaceId === undefined || route.ticketId === undefined) return
+    centre?.open(artifact)
+    navigate({
+      workspaceId: route.workspaceId,
+      ticketId: route.ticketId,
+      view: 'artifact',
+      artifact,
+    })
   }
 
   return (
     <div className="flex h-full">
-      <nav className="flex w-60 shrink-0 flex-col border-r border-border px-3 py-4">
+      {collapsed && (
+        <button
+          type="button"
+          aria-label="Show the repositories"
+          onClick={() => setCollapsed(false)}
+          className="shrink-0 border-r border-border px-2 py-4 text-[13px] text-muted-foreground hover:text-foreground focus-visible:outline-none"
+        >
+          <span aria-hidden className="font-mono">
+            ›
+          </span>
+        </button>
+      )}
+
+      <nav
+        className={`${collapsed ? 'hidden' : 'flex'} w-60 shrink-0 flex-col border-r border-border px-3 py-4`}
+      >
         <span className="px-2 pb-5 font-mono text-[13px] tracking-tight text-keel">keel</span>
 
         <div className="flex flex-col pb-5">
@@ -137,9 +176,9 @@ export default function App() {
         )}
       </nav>
 
-      <main className="flex min-w-0 flex-1 items-end p-10">
-        {route.ticketId === undefined ? (
-          <p className="max-w-[40ch] text-[15px] leading-relaxed text-muted-foreground">
+      <main className="flex min-h-0 min-w-0 flex-1">
+        {route.ticketId === undefined || centre === undefined ? (
+          <p className="max-w-[40ch] self-end p-10 text-[15px] leading-relaxed text-muted-foreground">
             {workspace === undefined
               ? 'Pick a repository to work in. Everything the agent does stays visible, and nothing runs until you allow it.'
               : workspace.state === 'ready'
@@ -147,9 +186,7 @@ export default function App() {
                 : workspace.reason}
           </p>
         ) : (
-          <p className="max-w-[40ch] text-[13px] text-muted-foreground">
-            The ticket, its pull request and the architecture diagrams land in this space.
-          </p>
+          <Centre centre={centre} snapshot={snapshot} onOpen={openArtifact} />
         )}
       </main>
 

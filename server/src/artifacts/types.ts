@@ -85,14 +85,18 @@ export interface ArtifactReader {
    *
    * A `c4View` reference is not a file and is refused here; it is read
    * through the architecture reader.
+   *
+   * The ticket is named because the frozen hash lives in that ticket's
+   * `state.json`. The same file can be a stub of more than one ticket, so
+   * searching for it would report a fingerprint from whichever ticket was
+   * looked at first, which is worse than reporting none.
    */
-  read: (workspace: Workspace, ref: ArtifactRef) => Promise<ArtifactContent>
+  read: (workspace: Workspace, ticketId: TicketId, ref: ArtifactRef) => Promise<ArtifactContent>
 }
 
 export type CreateArtifactReader = (dependencies: ArtifactReaderDependencies) => ArtifactReader
 
 export interface ArtifactReaderDependencies {
-  workspaces: WorkspaceRegistry
   architecture: ArchitectureViewSource
 }
 

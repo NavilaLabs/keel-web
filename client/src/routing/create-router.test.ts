@@ -76,3 +76,69 @@ describe('router', () => {
     expect(listener).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the artefact in the URL', () => {
+  beforeEach(() => {
+    globalThis.history.replaceState(null, '', '/')
+  })
+
+  it('reads a document beside the ticket', () => {
+    expect(at('/workspaces/w1/tickets/9?kind=knowledge&path=tickets/9/knowledge.md').current()).toEqual(
+      {
+        workspaceId: 'w1',
+        ticketId: '9',
+        view: 'artifact',
+        artifact: { kind: 'knowledge', repository: 'ticket', path: 'tickets/9/knowledge.md' },
+      },
+    )
+  })
+
+  it('reads a stub with its symbol, out of the code repository', () => {
+    expect(
+      at('/workspaces/w1/tickets/9?kind=stub&path=server/src/x.ts&symbol=Reader').current().artifact,
+    ).toEqual({ kind: 'stub', repository: 'code', path: 'server/src/x.ts', symbol: 'Reader' })
+  })
+
+  it('reads a view with the branch its model lives on', () => {
+    expect(at('/workspaces/w1/tickets/9?kind=c4View&view=server&branch=ticket/9').current().artifact).toEqual(
+      { kind: 'c4View', view: 'server', branch: 'ticket/9' },
+    )
+  })
+
+  it('lands on the ticket rather than an error when the link is mangled', () => {
+    expect(at('/workspaces/w1/tickets/9?kind=knowledge').current()).toEqual({
+      workspaceId: 'w1',
+      ticketId: '9',
+      view: 'none',
+    })
+    expect(at('/workspaces/w1/tickets/9?kind=nonsense&path=x').current().view).toBe('none')
+  })
+
+  it('ignores an artefact without a ticket, which cannot be resolved', () => {
+    expect(at('/workspaces/w1?kind=knowledge&path=tickets/9/knowledge.md').current()).toEqual({
+      workspaceId: 'w1',
+      view: 'none',
+    })
+  })
+
+  it('writes the artefact back into the URL', () => {
+    const router = at('/')
+    router.navigate({
+      workspaceId: 'w1',
+      ticketId: '9',
+      view: 'artifact',
+      artifact: { kind: 'adr', repository: 'ticket', path: 'tickets/9/adr/0015.md' },
+    })
+
+    expect(globalThis.location.pathname + globalThis.location.search).toBe(
+      '/workspaces/w1/tickets/9?kind=adr&path=tickets%2F9%2Fadr%2F0015.md',
+    )
+  })
+
+  it('drops the artefact from the URL when the centre shows none', () => {
+    const router = at('/workspaces/w1/tickets/9?kind=adr&path=tickets/9/adr/0015.md')
+    router.navigate({ workspaceId: 'w1', ticketId: '9', view: 'none' })
+
+    expect(globalThis.location.search).toBe('')
+  })
+})
