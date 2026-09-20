@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import type { ArchitectureView, ArtifactRef } from '@keel-web/protocol'
+import { DiagramBoundary } from './diagram-boundary.tsx'
 
 // likec4 brings a diagram runtime an order of magnitude larger than the rest
 // of this client. A reader who never opens a view never loads it.
@@ -61,14 +62,16 @@ export function ArchitecturePane({ workspaceId, view, branch, onOpen }: PaneProp
   }
 
   return (
-    <Suspense fallback={<p className="text-[13px] text-muted-foreground">Drawing</p>}>
-      <DiagramView
-        view={laidOut}
-        onNavigate={(next) => onOpen({ kind: 'c4View', view: next, ...(branch && { branch }) })}
-        onFollowLink={(ref) => {
-          if (ref) onOpen(ref)
-        }}
-      />
-    </Suspense>
+    <DiagramBoundary>
+      <Suspense fallback={<p className="text-[13px] text-muted-foreground">Drawing</p>}>
+        <DiagramView
+          view={laidOut}
+          onNavigate={(next) => onOpen({ kind: 'c4View', view: next, ...(branch && { branch }) })}
+          onFollowLink={(ref) => {
+            if (ref) onOpen(ref)
+          }}
+        />
+      </Suspense>
+    </DiagramBoundary>
   )
 }

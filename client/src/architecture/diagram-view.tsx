@@ -1,11 +1,14 @@
 import { useMemo, useRef } from 'react'
-import { createLikeC4Model } from 'likec4/model'
+import { LikeC4Model } from '@likec4/core/model'
 import { LikeC4ModelProvider, ReactLikeC4 } from 'likec4/react'
 import { artifactOfLink } from './follow-link.ts'
 import type { DiagramViewProps } from './types.ts'
 
 export function DiagramView({ view, onNavigate, onFollowLink }: DiagramViewProps) {
-  const model = useMemo(() => createLikeC4Model(view.model as never), [view.model])
+  // Built from @likec4/core rather than from likec4/model: the latter pulls
+  // in a runtime chunk that calls createRequire, which a browser has no
+  // answer for. This is the same call one line deeper.
+  const model = useMemo(() => LikeC4Model.create(view.model as never), [view.model])
   const container = useRef<HTMLDivElement>(null)
 
   return (
