@@ -3,6 +3,7 @@ import Markdown from 'react-markdown'
 import rehypeSlug from 'rehype-slug'
 import remarkGfm from 'remark-gfm'
 import type { ArtifactRef, StubFingerprint } from '@keel-web/protocol'
+import { ArchitecturePane } from '../architecture/architecture-pane.tsx'
 import type { OpenArtifact } from './types.ts'
 
 const markdownKinds = new Set<ArtifactRef['kind']>(['knowledge', 'adr', 'document'])
@@ -33,7 +34,9 @@ function resolveWithin(from: string, href: string): string | undefined {
   return path.length === 0 ? undefined : path.join('/')
 }
 
-function kindOf(path: string): ArtifactRef['kind'] {
+type TicketFile = Extract<ArtifactRef, { repository: 'ticket' }>
+
+function kindOf(path: string): TicketFile['kind'] {
   if (path.endsWith('.c4')) return 'c4Source'
   if (!path.endsWith('.md')) return 'file'
   return path.includes('/adr/') ? 'adr' : 'document'
@@ -66,12 +69,33 @@ function Source({ text, language }: { text: string; language: string }) {
     let current = true
     void (async () => {
       try {
-        const { codeToHtml } = await import('shiki')
-        const html = await codeToHtml(text, {
-          lang: language,
+        // The fine-grained entry points, not the `shiki` bundle: that one
+        // carries every grammar it knows, and this view only ever shows
+        // TypeScript. The JavaScript engine avoids the WebAssembly payload.
+        const [
+          { createHighlighterCore },
+          { createJavaScriptRegexEngine },
+          typescript,
+          light,
+          dark,
+        ] = await Promise.all([
+          import('shiki/core'),
+          import('shiki/engine/javascript'),
+          import('@shikijs/langs/typescript'),
+          import('@shikijs/themes/github-light'),
+          import('@shikijs/themes/github-dark'),
+        ])
+        const highlighter = await createHighlighterCore({
+          langs: [typescript.default],
+          themes: [light.default, dark.default],
+          engine: createJavaScriptRegexEngine(),
+        })
+        const html = highlighter.codeToHtml(text, {
+          lang: language === 'typescript' ? 'typescript' : 'text',
           themes: { light: 'github-light', dark: 'github-dark' },
           defaultColor: false,
         })
+        highlighter.dispose()
         if (current) setHighlighted(html)
       } catch {
         if (current) setHighlighted(undefined)
@@ -97,7 +121,15 @@ function Source({ text, language }: { text: string; language: string }) {
   )
 }
 
-function Document({ text, path, onOpen }: { text: string; path: string; onOpen: (ref: ArtifactRef) => void }) {
+function Document({
+  text,
+  path,
+  onOpen,
+}: {
+  text: string
+  path: string
+  onOpen: (ref: ArtifactRef) => void
+}) {
   return (
     <div className="max-w-[78ch] text-[15px] leading-[1.7] text-foreground [&>*+*]:mt-4 [&_a]:text-keel [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_code]:bg-code [&_code]:px-1 [&_code]:font-mono [&_code]:text-[13px] [&_h1]:text-[19px] [&_h1]:font-medium [&_h2]:mt-7 [&_h2]:text-[16px] [&_h2]:font-medium [&_h3]:mt-5 [&_h3]:text-[15px] [&_h3]:font-medium [&_hr]:border-border [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_pre]:overflow-x-auto [&_pre]:bg-code [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-[13px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:w-full [&_table]:border-collapse [&_td]:border-t [&_td]:border-border [&_td]:py-1.5 [&_td]:pr-4 [&_th]:py-1.5 [&_th]:pr-4 [&_th]:text-left [&_th]:font-medium [&_ul]:list-disc [&_ul]:pl-5">
       <Markdown
@@ -139,11 +171,27 @@ function Document({ text, path, onOpen }: { text: string; path: string; onOpen: 
 
 export function ArtifactView({
   artifact,
+  workspaceId,
   onOpen,
 }: {
   artifact: OpenArtifact
+  workspaceId: string
   onOpen: (ref: ArtifactRef) => void
 }) {
+  if (artifact.ref.kind === 'c4View') {
+    return (
+      <ArchitecturePane
+        // Keyed by the view, so moving to another one starts from nothing
+        // rather than from the previous diagram's state.
+        key={`${artifact.ref.view}-${artifact.ref.branch ?? ''}`}
+        workspaceId={workspaceId}
+        view={artifact.ref.view}
+        branch={artifact.ref.branch}
+        onOpen={onOpen}
+      />
+    )
+  }
+
   if (artifact.error !== undefined) {
     return <p className="text-[13px] leading-relaxed text-destructive">{artifact.error}</p>
   }

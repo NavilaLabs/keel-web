@@ -3,7 +3,11 @@ import type { ArtifactContent, ArtifactTree } from '@keel-web/protocol'
 import { describe, expect, it } from 'vitest'
 import type { Workspace, WorkspaceRegistry } from '../workspaces/types.js'
 import { createArtifactRoutes } from './create-artifact-routes.js'
-import { ArtifactOutsideWorkspaceError, UnreadableArtifactError, type ArtifactReader } from './types.js'
+import {
+  ArtifactOutsideWorkspaceError,
+  UnreadableArtifactError,
+  type ArtifactReader,
+} from './types.js'
 
 const workspace: Workspace = {
   id: 'w1',
@@ -27,10 +31,7 @@ const content: ArtifactContent = {
 
 function app(artifacts: Partial<ArtifactReader>) {
   const routes = new Hono()
-  routes.route(
-    '/api',
-    createArtifactRoutes({ artifacts: artifacts as ArtifactReader, workspaces }),
-  )
+  routes.route('/api', createArtifactRoutes({ artifacts: artifacts as ArtifactReader, workspaces }))
   return routes
 }
 
@@ -85,7 +86,9 @@ describe('the artefact routes', () => {
   it('refuses a request that names no artefact', async () => {
     const routes = app({ read: async () => content })
 
-    const response = await routes.request('/api/workspaces/w1/tickets/9/artifacts/content?kind=file')
+    const response = await routes.request(
+      '/api/workspaces/w1/tickets/9/artifacts/content?kind=file',
+    )
 
     expect(response.status).toBe(400)
   })

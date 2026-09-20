@@ -193,19 +193,17 @@ export const createArtifactReader: CreateArtifactReader = ({ architecture }): Ar
 
     const contracts: ArtifactNode[] = []
     for (const block of state.blocks ?? []) {
-      const stubs = (block.claimed_stubs ?? []).map(
-        (stub): ArtifactNode => ({
-          type: 'artifact',
-          label: stub.symbol ?? basename(stub.path),
-          ref: {
-            kind: 'stub',
-            repository: 'code',
-            path: stub.path,
-            ...(stub.symbol && { symbol: stub.symbol }),
-          },
-          named: true,
-        }),
-      )
+      const stubs = (block.claimed_stubs ?? []).map((stub): ArtifactNode => ({
+        type: 'artifact',
+        label: stub.symbol ?? basename(stub.path),
+        ref: {
+          kind: 'stub',
+          repository: 'code',
+          path: stub.path,
+          ...(stub.symbol && { symbol: stub.symbol }),
+        },
+        named: true,
+      }))
       contracts.push(...group(block.title ? `${block.id} ${block.title}` : block.id, stubs))
     }
     nodes.push(...group('Contracts', contracts))
@@ -236,14 +234,12 @@ export const createArtifactReader: CreateArtifactReader = ({ architecture }): Ar
 
     const workflow = workflowFiles
       .filter((file) => files.includes(file))
-      .map(
-        (file): ArtifactNode => ({
-          type: 'artifact',
-          label: file,
-          ref: { kind: 'file', repository: 'ticket', path: join(directory, file) },
-          named: false,
-        }),
-      )
+      .map((file): ArtifactNode => ({
+        type: 'artifact',
+        label: file,
+        ref: { kind: 'file', repository: 'ticket', path: join(directory, file) },
+        named: false,
+      }))
     nodes.push(...group('Workflow', workflow))
 
     return { ticketId, nodes }

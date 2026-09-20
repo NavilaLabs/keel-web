@@ -2,6 +2,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
+import { createArchitectureReader, createArchitectureRoutes } from './architecture/index.js'
 import { createArtifactReader, createArtifactRoutes } from './artifacts/index.js'
 import { createChatRoutes } from './chat/index.js'
 import { createDirectoryBrowser, createDirectoryRoutes } from './directories/index.js'
@@ -21,9 +22,8 @@ const workspaces = await createWorkspaceRegistry(createWorkspaceStore())
 const transcript = createTranscriptLog(workspaces)
 const sessions = createSessionRegistry({ workspaces, configDirectory, transcript, logger })
 
-// Until b3 reads the architecture model, there are no views to offer, and a
-// tree that says so is correct rather than incomplete.
-const artifacts = createArtifactReader({ architecture: { views: async () => [] } })
+const architecture = createArchitectureReader()
+const artifacts = createArtifactReader({ architecture })
 
 const additionalHosts = (process.env.KEEL_WEB_ALLOWED_HOSTS ?? '')
   .split(',')
@@ -40,6 +40,7 @@ app.route('/api', createWorkspaceRoutes({ workspaces }))
 app.route('/api', createDirectoryRoutes({ directories: createDirectoryBrowser() }))
 app.route('/api', createChatRoutes({ sessions, transcript, workspaces }))
 app.route('/api', createArtifactRoutes({ artifacts, workspaces }))
+app.route('/api', createArchitectureRoutes({ architecture, workspaces }))
 
 const port = Number(process.env.PORT ?? 3000)
 

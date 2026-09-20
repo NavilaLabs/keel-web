@@ -26,7 +26,8 @@ describe('the host guard', () => {
 
     expect(response.status).toBe(403)
     expect(await response.json()).toEqual({
-      reason: 'keel-web answers to this machine only, and rebound.example.com is not one of its names.',
+      reason:
+        'keel-web answers to this machine only, and rebound.example.com is not one of its names.',
     })
   })
 

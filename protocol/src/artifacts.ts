@@ -115,4 +115,3 @@ export interface ArtifactContent {
   /** Present only for a stub whose fingerprint `state.json` recorded. */
   fingerprint?: StubFingerprint
 }
-

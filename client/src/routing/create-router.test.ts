@@ -83,26 +83,27 @@ describe('the artefact in the URL', () => {
   })
 
   it('reads a document beside the ticket', () => {
-    expect(at('/workspaces/w1/tickets/9?kind=knowledge&path=tickets/9/knowledge.md').current()).toEqual(
-      {
-        workspaceId: 'w1',
-        ticketId: '9',
-        view: 'artifact',
-        artifact: { kind: 'knowledge', repository: 'ticket', path: 'tickets/9/knowledge.md' },
-      },
-    )
+    expect(
+      at('/workspaces/w1/tickets/9?kind=knowledge&path=tickets/9/knowledge.md').current(),
+    ).toEqual({
+      workspaceId: 'w1',
+      ticketId: '9',
+      view: 'artifact',
+      artifact: { kind: 'knowledge', repository: 'ticket', path: 'tickets/9/knowledge.md' },
+    })
   })
 
   it('reads a stub with its symbol, out of the code repository', () => {
     expect(
-      at('/workspaces/w1/tickets/9?kind=stub&path=server/src/x.ts&symbol=Reader').current().artifact,
+      at('/workspaces/w1/tickets/9?kind=stub&path=server/src/x.ts&symbol=Reader').current()
+        .artifact,
     ).toEqual({ kind: 'stub', repository: 'code', path: 'server/src/x.ts', symbol: 'Reader' })
   })
 
   it('reads a view with the branch its model lives on', () => {
-    expect(at('/workspaces/w1/tickets/9?kind=c4View&view=server&branch=ticket/9').current().artifact).toEqual(
-      { kind: 'c4View', view: 'server', branch: 'ticket/9' },
-    )
+    expect(
+      at('/workspaces/w1/tickets/9?kind=c4View&view=server&branch=ticket/9').current().artifact,
+    ).toEqual({ kind: 'c4View', view: 'server', branch: 'ticket/9' })
   })
 
   it('lands on the ticket rather than an error when the link is mangled', () => {

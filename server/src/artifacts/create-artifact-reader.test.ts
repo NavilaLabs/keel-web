@@ -44,7 +44,10 @@ beforeEach(async () => {
     join(ticketRepository, 'tickets/9/adr/0015-a-host-guard.md'),
     '# 0015. A host guard in front of every route\n',
   )
-  await writeFile(join(ticketRepository, 'tickets/1/adr/0002-containers.md'), '# 0002. Containers\n')
+  await writeFile(
+    join(ticketRepository, 'tickets/1/adr/0002-containers.md'),
+    '# 0002. Containers\n',
+  )
   await writeFile(join(ticketRepository, 'tickets/9/notes-for-me.txt'), 'left here on purpose\n')
   await writeFile(join(ticketRepository, 'tickets/9/events.jsonl'), '{}\n')
   await writeFile(join(ticketRepository, 'tickets/9/.state-snapshot.json'), '{}\n')
@@ -63,7 +66,11 @@ beforeEach(async () => {
           id: 'b1',
           title: 'Artefacts served',
           claimed_stubs: [
-            { path: 'server/src/artifacts/types.ts', symbol: 'ArtifactReader', fingerprint: frozen },
+            {
+              path: 'server/src/artifacts/types.ts',
+              symbol: 'ArtifactReader',
+              fingerprint: frozen,
+            },
           ],
         },
       ],
@@ -100,9 +107,7 @@ describe('the artefact tree', () => {
     const reader = createArtifactReader({ architecture: noViews })
 
     const tree = await reader.tree(workspace, '9')
-    const contracts = tree.nodes.find(
-      (node) => node.type === 'group' && node.label === 'Contracts',
-    )
+    const contracts = tree.nodes.find((node) => node.type === 'group' && node.label === 'Contracts')
 
     expect(contracts?.type === 'group' && contracts.children[0]).toMatchObject({
       type: 'group',
@@ -127,7 +132,11 @@ describe('the artefact tree', () => {
     const tree = await reader.tree(workspace, '9')
 
     expect(tree.nodes.at(-1)).toMatchObject({ type: 'group', label: 'Workflow' })
-    expect(labelsOf(tree.nodes, 'Workflow')).toEqual(['state.json', 'events.jsonl', '.state-snapshot.json'])
+    expect(labelsOf(tree.nodes, 'Workflow')).toEqual([
+      'state.json',
+      'events.jsonl',
+      '.state-snapshot.json',
+    ])
   })
 
   it('explains an empty tree rather than pretending the ticket has nothing', async () => {

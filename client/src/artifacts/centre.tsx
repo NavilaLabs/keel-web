@@ -4,12 +4,13 @@ import { ArtifactView } from './artifact-view.tsx'
 import type { CentreSnapshot, CentreStore } from './types.ts'
 
 interface CentreProperties {
+  workspaceId: string
   centre: CentreStore
   snapshot: CentreSnapshot
   onOpen: (ref: ArtifactRef) => void
 }
 
-export function Centre({ centre, snapshot, onOpen }: CentreProperties) {
+export function Centre({ workspaceId, centre, snapshot, onOpen }: CentreProperties) {
   const active = snapshot.active === undefined ? undefined : snapshot.open[snapshot.active]
 
   return (
@@ -69,11 +70,11 @@ export function Centre({ centre, snapshot, onOpen }: CentreProperties) {
         >
           {active === undefined ? (
             <p className="max-w-[40ch] text-[13px] leading-relaxed text-muted-foreground">
-              Pick an artefact on the left. keel brings one to the front by itself when the
-              workflow reaches a step that is about it.
+              Pick an artefact on the left. keel brings one to the front by itself when the workflow
+              reaches a step that is about it.
             </p>
           ) : (
-            <ArtifactView artifact={active} onOpen={onOpen} />
+            <ArtifactView artifact={active} workspaceId={workspaceId} onOpen={onOpen} />
           )}
         </div>
       </div>

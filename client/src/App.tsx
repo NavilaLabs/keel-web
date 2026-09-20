@@ -186,7 +186,12 @@ export default function App() {
                 : workspace.reason}
           </p>
         ) : (
-          <Centre centre={centre} snapshot={snapshot} onOpen={openArtifact} />
+          <Centre
+            workspaceId={route.workspaceId ?? ''}
+            centre={centre}
+            snapshot={snapshot}
+            onOpen={openArtifact}
+          />
         )}
       </main>
 
