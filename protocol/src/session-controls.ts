@@ -10,16 +10,16 @@
  * The permission modes keel-web offers.
  *
  * Narrower than the agent's own set on purpose. `bypassPermissions` would run
- * every tool unasked and `auto` would let a model decide in the developer's
- * place, so neither can be named on the wire and neither is accepted from a
- * client.
+ * every tool unasked, so it cannot be named on the wire and is not accepted
+ * from a client.
  *
  * `default` is the only mode in which every tool call reaches the browser.
- * `acceptEdits` runs file edits unasked, `plan` lets the agent plan without
- * running anything, and `dontAsk` denies whatever is not already allowed
- * instead of asking.
+ * `auto` lets a classifier answer the ones it is sure about and asks about
+ * the rest, `acceptEdits` runs file edits unasked, `dontAsk` denies whatever
+ * is not already allowed instead of asking, and `plan` lets the agent plan
+ * without running anything.
  */
-export type SessionMode = 'default' | 'acceptEdits' | 'plan' | 'dontAsk'
+export type SessionMode = 'default' | 'auto' | 'acceptEdits' | 'plan' | 'dontAsk'
 
 /** How much thinking a model is asked for, where the model supports it. */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'

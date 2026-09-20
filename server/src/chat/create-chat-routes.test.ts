@@ -185,11 +185,20 @@ describe('chat input endpoint', () => {
   it('reads a mode keel-web does not offer as malformed, so naming it reaches nothing', async () => {
     const sessions = registryStub()
 
-    for (const mode of ['bypassPermissions', 'auto', 'whatever']) {
+    for (const mode of ['bypassPermissions', 'whatever']) {
       const response = await postInput(sessions, { command: 'settings', change: { mode } })
       expect(response.status).toBe(400)
     }
     expect(sessions.changeControls).not.toHaveBeenCalled()
+  })
+
+  it('takes every mode keel-web offers', async () => {
+    const sessions = registryStub()
+
+    for (const mode of ['default', 'auto', 'acceptEdits', 'dontAsk', 'plan']) {
+      const response = await postInput(sessions, { command: 'settings', change: { mode } })
+      expect(response.status).toBe(204)
+    }
   })
 
   it('answers 409 when the session cannot run with what was asked for', async () => {

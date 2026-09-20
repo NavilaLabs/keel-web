@@ -128,7 +128,7 @@ function identity(key: SessionKey): string {
   return `${key.workspaceId}/${key.ticketId}`
 }
 
-const offeredModes: readonly SessionMode[] = ['default', 'acceptEdits', 'plan', 'dontAsk']
+const offeredModes: readonly SessionMode[] = ['default', 'auto', 'acceptEdits', 'dontAsk', 'plan']
 
 function modelChoiceOf(info: ModelInfo): ModelChoice {
   return {

@@ -461,7 +461,7 @@ describe('session registry', () => {
   it('leaves the call to the agent in any mode but the default one', async () => {
     await live()
 
-    for (const mode of ['acceptEdits', 'plan', 'dontAsk']) {
+    for (const mode of ['auto', 'acceptEdits', 'plan', 'dontAsk']) {
       expect(await preToolUse({ tool_name: 'Edit', permission_mode: mode })).toEqual({})
     }
   })

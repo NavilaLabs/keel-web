@@ -9,7 +9,7 @@ function isRecordedEvent(message: StreamMessage): message is ServerEvent {
   return 'seq' in message
 }
 
-const offeredModes = ['default', 'acceptEdits', 'plan', 'dontAsk']
+const offeredModes = ['default', 'auto', 'acceptEdits', 'dontAsk', 'plan']
 const effortLevels = ['low', 'medium', 'high', 'xhigh', 'max']
 
 /**
