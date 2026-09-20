@@ -23,8 +23,12 @@ import type { LoggerVariables } from '../logging/types.js'
  * `POST /api/workspaces/:workspaceId/tickets/:ticketId/input` takes one
  * `ClientCommand`. It answers 204 on success, 400 for a malformed command, 404
  * when the session does not exist or the workspace is unknown, and 409 when a
- * permission answer arrives for a request that is no longer held. It never
- * blocks on the agent.
+ * permission answer arrives for a request that is no longer held or when a
+ * settings change names a model or an effort level the session cannot run
+ * with. It never blocks on the agent.
+ *
+ * A mode the wire contract does not name is malformed rather than refused, so
+ * the modes keel-web does not offer cannot be reached by naming them.
  *
  * Neither route starts an agent for an unknown session: only the stream does,
  * so a stray POST cannot spawn one. An unregistered workspace is refused by

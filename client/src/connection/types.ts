@@ -1,4 +1,10 @@
-import type { AssistantDelta, ClientCommand, ServerEvent, SessionKey } from '@keel-web/protocol'
+import type {
+  AssistantDelta,
+  ClientCommand,
+  ServerEvent,
+  SessionControlsMessage,
+  SessionKey,
+} from '@keel-web/protocol'
 
 export type FatalReason = 'auth_required' | 'startup_failed'
 
@@ -7,6 +13,13 @@ export interface StreamHandlers {
   onEvent: (event: ServerEvent) => void
   /** Token-level text. Safe to ignore entirely. */
   onDelta: (delta: AssistantDelta) => void
+  /**
+   * What the session runs with, in full.
+   *
+   * Called once soon after the stream opens and again on every change. Each
+   * call replaces what the one before it said. Safe to ignore entirely.
+   */
+  onControls: (message: SessionControlsMessage) => void
   /**
    * The stream will not come back.
    *
@@ -20,7 +33,14 @@ export interface StreamHandlers {
 /** Closes the stream. Safe to call twice, and safe to call after `onFatal`. */
 export type CloseStream = () => void
 
-/** What became of a command the browser sent. */
+/**
+ * What became of a command the browser sent.
+ *
+ * `not_held` covers both a permission request someone else answered first and
+ * a settings change the session cannot run with, because both mean the same
+ * thing to a caller: the command was understood and the session would not
+ * take it.
+ */
 export type SendResult = 'accepted' | 'malformed' | 'no_session' | 'not_held'
 
 /** Why a stream ended for good rather than being retried. */

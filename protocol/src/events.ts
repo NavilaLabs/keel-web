@@ -5,6 +5,8 @@
  * endpoint. Both sides depend on this module and nothing else.
  */
 
+import type { SessionControls, SessionSettingsChange } from './session-controls.js'
+
 /** Monotonic per ticket, starting at 1. Gaps mean events were lost, never reordered. */
 export type Sequence = number
 
@@ -131,12 +133,31 @@ export interface QuestionOption {
  *
  * `questions` is present exactly when `toolName` is `AskUserQuestion`; the
  * answer must then use the `answers` decision rather than allow or deny.
+ *
+ * `alwaysAllowable` and `defaultToNo` are absent on a request recorded before
+ * they existed, and a reader that replays an old transcript must read an
+ * absent field as `false`.
  */
 export interface PermissionRequest {
   requestId: RequestId
   toolName: string
   input: Record<string, unknown>
   questions?: Question[]
+  /**
+   * Whether this call may be allowed for the rest of the session.
+   *
+   * False when a rule covering it would grant more than the call itself, in
+   * which case offering it anyway would widen the permission the developer
+   * thinks they are giving.
+   */
+  alwaysAllowable?: boolean
+  /**
+   * Whether the answer must not be reachable by a single stray keystroke.
+   *
+   * True for a call the agent flagged as one to decline by default, so the
+   * prompt opens on its refusal and offers no shortcut to approval.
+   */
+  defaultToNo?: boolean
 }
 
 /**
@@ -149,9 +170,14 @@ export interface PermissionRequest {
  * multi-select answer lists the chosen labels separated by a comma, and free
  * text the developer typed instead of choosing arrives as the value. This is
  * the shape the agent expects; anything else is read as no answer at all.
+ *
+ * `alwaysAllow` allows this call and every later one the agent would ask the
+ * same question for, until the session ends. It is refused for a request whose
+ * `alwaysAllowable` is not true, and nothing it grants outlives the session:
+ * no rule is written to the developer's settings.
  */
 export type PermissionDecision =
-  | { decision: 'allow' }
+  | { decision: 'allow'; alwaysAllow?: boolean }
   | { decision: 'deny'; message: string }
   | { decision: 'answers'; answers: Record<string, string> }
 
@@ -201,15 +227,35 @@ export interface AssistantDelta extends SessionKey {
   text: string
 }
 
+/**
+ * What the session runs with, sent live and never recorded.
+ *
+ * Carries no sequence number and is absent from a replay. It is sent once
+ * when a viewer attaches and again whenever any of it changes, and each one
+ * replaces the one before it: a client that has seen only the latest is
+ * fully up to date. A client that ignores it entirely still renders a correct
+ * transcript.
+ */
+export interface SessionControlsMessage extends SessionKey {
+  type: 'session.controls'
+  controls: SessionControls
+}
+
 /** Everything the stream sends. */
-export type StreamMessage = ServerEvent | AssistantDelta
+export type StreamMessage = ServerEvent | AssistantDelta | SessionControlsMessage
 
 /**
  * What the browser sends to the input endpoint.
  *
  * `interrupt` stops the current turn and leaves the session usable.
+ *
+ * `settings` changes what the session runs with. It takes effect from the
+ * next turn on and never interrupts a running one, and the change is
+ * confirmed by the next `session.controls` message rather than by the
+ * response.
  */
 export type ClientCommand =
   | { command: 'message'; text: string }
   | { command: 'permission'; requestId: RequestId; decision: PermissionDecision }
   | { command: 'interrupt' }
+  | { command: 'settings'; change: SessionSettingsChange }

@@ -1,7 +1,12 @@
 import type { PermissionDecision, PermissionRequest, RequestId } from '@keel-web/protocol'
 
 /**
- * Holds every tool call of one session until the browser answers.
+ * Holds a tool call of one session until the browser answers.
+ *
+ * It sees the calls the session's mode leaves to the developer, which is
+ * every call only while the session runs in its default mode. What another
+ * mode settles in advance never reaches here, and is therefore neither held
+ * nor recorded as an answer.
  *
  * There is no timeout: an unanswered call keeps its turn paused for as long
  * as the session lives. This is deliberate, so silence is never recorded as
