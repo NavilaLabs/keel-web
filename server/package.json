@@ -12,6 +12,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.278",
     "@hono/node-server": "^1.13.0",
     "hono": "^4.6.0",
+    "likec4": "^1.59.3",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3"
   },
